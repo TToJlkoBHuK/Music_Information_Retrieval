@@ -38,13 +38,15 @@ notation/
 ```python
 @dataclass
 class QuantizeConfig:
-    strength: float = 0.7          # 0 = не трогать, 1 = жёстко в сетку
-    max_subdivision: int = 16      # мельчайшая допустимая длительность
+    strength: float = 0.7  # 0 = не трогать, 1 = жёстко в сетку
+    max_subdivision: int = 16  # мельчайшая допустимая длительность
     allow_triplets: bool = True
-    min_duration_beats: float = 0.0625   # короче — считаем мусором
+    min_duration_beats: float = 0.0625  # короче — считаем мусором
 
-def quantize(notes: list[NoteEvent], tempo: TempoMap,
-             config: QuantizeConfig) -> list[QuantizedNote]:
+
+def quantize(
+    notes: list[NoteEvent], tempo: TempoMap, config: QuantizeConfig
+) -> list[QuantizedNote]:
     """
     Вход:  события в секундах + временна́я сетка
     Выход: события с позициями и длительностями в долях
@@ -62,11 +64,12 @@ def quantize(notes: list[NoteEvent], tempo: TempoMap,
     что даёт минимальную суммарную ошибку по началу и длительности.
     """
 
+
 @dataclass(frozen=True)
 class QuantizedNote:
     event: NoteEvent
-    start_beat: float          # позиция в долях от начала
-    duration_beats: Fraction   # именно Fraction, не float
+    start_beat: float  # позиция в долях от начала
+    duration_beats: Fraction  # именно Fraction, не float
     is_triplet: bool = False
 ```
 
@@ -77,13 +80,11 @@ class QuantizedNote:
 ```python
 # Профили Крумхансля–Кесслера: усреднённая по экспериментам
 # «уместность» каждой из 12 ступеней в мажоре и миноре
-MAJOR_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09,
-                 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
-MINOR_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53,
-                 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
+MAJOR_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
+MINOR_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
 
-def detect_key(notes: list[NoteEvent],
-               weight_by_duration: bool = True) -> KeyDetectionResult:
+
+def detect_key(notes: list[NoteEvent], weight_by_duration: bool = True) -> KeyDetectionResult:
     """
     Вход:  события
     Выход: тональность + уверенность + альтернативы
@@ -97,12 +98,13 @@ def detect_key(notes: list[NoteEvent],
       3. Максимум = ответ, разрыв с вторым местом = уверенность.
     """
 
+
 @dataclass
 class KeyDetectionResult:
-    key: str                    # "D major", "B minor"
+    key: str  # "D major", "B minor"
     confidence: float
-    alternatives: list[tuple[str, float]]   # топ-3 для показа в интерфейсе
-    sharps_flats: int           # +2 = два диеза, -3 = три бемоля
+    alternatives: list[tuple[str, float]]  # топ-3 для показа в интерфейсе
+    sharps_flats: int  # +2 = два диеза, -3 = три бемоля
 ```
 
 **Почему это критично.** Без тональности каждая чёрная клавиша записывается случайным диезом, и нотный лист покрывается десятками случайных знаков. В ре мажоре фа-диез и до-диез выставляются один раз при ключе — и текст становится читаемым. Ровно на этом спотыкается импорт сырого MIDI в MuseScore.
@@ -112,8 +114,7 @@ class KeyDetectionResult:
 ## `meter.py`
 
 ```python
-def detect_time_signature(notes: list[QuantizedNote],
-                          tempo: TempoMap) -> tuple[int, int, float]:
+def detect_time_signature(notes: list[QuantizedNote], tempo: TempoMap) -> tuple[int, int, float]:
     """
     Выход: (числитель, знаменатель, уверенность)
 
@@ -123,15 +124,16 @@ def detect_time_signature(notes: list[QuantizedNote],
     в N долей. Лучший период даёт числитель.
     """
 
-def find_anacrusis(notes: list[QuantizedNote],
-                   beats_per_bar: int) -> float:
+
+def find_anacrusis(notes: list[QuantizedNote], beats_per_bar: int) -> float:
     """Затакт: произведение может начинаться не с сильной доли.
     Возвращает длину неполного первого такта в долях.
     Если это не учесть, все тактовые черты уедут."""
 
-def split_into_measures(notes: list[QuantizedNote],
-                        beats_per_bar: int,
-                        anacrusis: float) -> list[Measure]:
+
+def split_into_measures(
+    notes: list[QuantizedNote], beats_per_bar: int, anacrusis: float
+) -> list[Measure]:
     """Нарезка на такты. Ноты, пересекающие тактовую черту,
     разбиваются на две части, связанные лигой."""
 ```
@@ -139,8 +141,7 @@ def split_into_measures(notes: list[QuantizedNote],
 ## `staves.py`
 
 ```python
-def assign_staves(measures: list[Measure],
-                  use_hand_hints: bool = True) -> list[Measure]:
+def assign_staves(measures: list[Measure], use_hand_hints: bool = True) -> list[Measure]:
     """
     Если у нот есть hand из видеоканала — берём его, это надёжнее всего.
 
@@ -185,8 +186,7 @@ def fill_rests(measure: Measure, beats_per_bar: int) -> Measure:
 ## `dynamics.py`
 
 ```python
-def assign_dynamics(measures: list[Measure],
-                    window_beats: float = 4.0) -> list[Measure]:
+def assign_dynamics(measures: list[Measure], window_beats: float = 4.0) -> list[Measure]:
     """
     velocity → динамические оттенки.
 
@@ -205,9 +205,9 @@ def assign_dynamics(measures: list[Measure],
 ## `builder.py`
 
 ```python
-def build_transcription(fusion_result: FusionResult,
-                        tempo: TempoMap,
-                        config: NotationConfig) -> Transcription:
+def build_transcription(
+    fusion_result: FusionResult, tempo: TempoMap, config: NotationConfig
+) -> Transcription:
     """Оркестровка всех шагов в правильном порядке.
     Возвращает Transcription (см. common/README.md),
     готовую к экспорту."""

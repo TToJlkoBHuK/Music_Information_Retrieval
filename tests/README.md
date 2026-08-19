@@ -26,24 +26,28 @@ tests/
 ### `fixtures/synth.py`
 
 ```python
-def render_visualizer_video(midi_path: Path, out_path: Path,
-                            fps: int = 30,
-                            resolution: tuple[int, int] = (1920, 1080),
-                            color_scheme: ColorScheme = ColorScheme.DEFAULT,
-                            crop_keyboard: tuple[int, int] | None = None,
-                            bitrate_kbps: int | None = None) -> Path:
+def render_visualizer_video(
+    midi_path: Path,
+    out_path: Path,
+    fps: int = 30,
+    resolution: tuple[int, int] = (1920, 1080),
+    color_scheme: ColorScheme = ColorScheme.DEFAULT,
+    crop_keyboard: tuple[int, int] | None = None,
+    bitrate_kbps: int | None = None,
+) -> Path:
     """Сгенерировать piano-visualizer-видео из MIDI.
 
     crop_keyboard=(48, 84) — сымитировать обрезанную клавиатуру.
     bitrate_kbps=500 — сымитировать плохое качество.
     Оба параметра нужны для стресс-тестов."""
 
-def synthesize_audio(midi_path: Path, out_path: Path,
-                     soundfont: Path,
-                     reverb: float = 0.0,
-                     noise_db: float = -60.0) -> Path:
+
+def synthesize_audio(
+    midi_path: Path, out_path: Path, soundfont: Path, reverb: float = 0.0, noise_db: float = -60.0
+) -> Path:
     """Синтез аудио из того же MIDI. Реверберация и шум —
     чтобы проверить устойчивость аудиоканала."""
+
 
 def midi_to_note_events(midi_path: Path) -> list[NoteEvent]:
     """Эталон в формате проекта — с ним сравниваются результаты."""
@@ -89,15 +93,17 @@ class TranscriptionMetrics:
     note_precision: float
     note_recall: float
     note_f1: float
-    onset_mae_ms: float          # средняя ошибка по времени атаки
+    onset_mae_ms: float  # средняя ошибка по времени атаки
     duration_mae_beats: float
     key_correct: bool
     time_signature_correct: bool
     tempo_error_percent: float
-    hand_accuracy: float         # доля нот в правильной руке
+    hand_accuracy: float  # доля нот в правильной руке
 
-def evaluate(predicted: list[NoteEvent], reference: list[NoteEvent],
-             onset_tolerance: float = 0.05) -> TranscriptionMetrics:
+
+def evaluate(
+    predicted: list[NoteEvent], reference: list[NoteEvent], onset_tolerance: float = 0.05
+) -> TranscriptionMetrics:
     """Допуск 50 мс — стандарт в MIR (используется в MIREX
     и в mir_eval), берём его, чтобы цифры были сопоставимы
     с опубликованными результатами других работ."""

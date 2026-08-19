@@ -1,0 +1,35 @@
+services:
+  mir:
+    build: .
+    image: mir:dev
+    volumes:
+      - ./data:/app/data
+      - ./mir:/app/mir
+      - ./tests:/app/tests
+      - ./scripts:/app/scripts
+      - ./config:/app/config
+      - mir-cache:/cache
+    environment:
+      # Прокси для YouTube. На Windows и macOS используйте
+      # host.docker.internal, на Linux — --network host
+      MIR_INGEST_PROXY: "${MIR_PROXY:-}"
+    working_dir: /app
+
+  docs:
+    build: .
+    image: mir:dev
+    command: mkdocs serve --dev-addr 0.0.0.0:8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./docs:/app/docs
+      - ./mir:/app/mir
+      - ./mkdocs.yml:/app/mkdocs.yml
+      - ./core:/app/core
+      - ./app:/app/app
+      - ./config:/app/config
+      - ./tests:/app/tests
+      - ./scripts:/app/scripts
+
+volumes:
+  mir-cache:

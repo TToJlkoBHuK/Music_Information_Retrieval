@@ -28,28 +28,30 @@ audio/
 ```python
 @dataclass
 class TranscriberConfig:
-    device: str = "cuda"           # "cuda" | "cpu", автоопределение при старте
-    chunk_seconds: float = 60.0    # длинные ролики обрабатываются кусками
-    overlap_seconds: float = 2.0   # перекрытие, чтобы не резать ноты на стыке
+    device: str = "cuda"  # "cuda" | "cpu", автоопределение при старте
+    chunk_seconds: float = 60.0  # длинные ролики обрабатываются кусками
+    overlap_seconds: float = 2.0  # перекрытие, чтобы не резать ноты на стыке
     onset_threshold: float = 0.3
     offset_threshold: float = 0.3
+
 
 class AudioTranscriber:
     def __init__(self, config: TranscriberConfig): ...
 
-    def transcribe(self, audio_path: Path,
-                   progress: ProgressCallback | None = None) -> AudioResult:
+    def transcribe(self, audio_path: Path, progress: ProgressCallback | None = None) -> AudioResult:
         """
         Вход:  WAV 16 кГц моно (подготовлен в ingest)
         Выход: AudioResult
         Бросает: TranscriptionError при отсутствии весов модели
         """
 
+
 @dataclass
 class AudioResult:
-    notes: list[NoteEvent]          # source=Source.AUDIO
+    notes: list[NoteEvent]  # source=Source.AUDIO
     pedal_events: list[PedalEvent]  # использование правой педали
     elapsed_sec: float
+
 
 @dataclass(frozen=True)
 class PedalEvent:
@@ -65,8 +67,7 @@ class PedalEvent:
 
 ```python
 class TempoAnalyzer:
-    def analyze(self, audio_path: Path,
-                force_bpm: float | None = None) -> TempoMap:
+    def analyze(self, audio_path: Path, force_bpm: float | None = None) -> TempoMap:
         """
         Вход:  аудиофайл
         Выход: TempoMap (bpm, моменты долей, моменты сильных долей)
@@ -77,8 +78,7 @@ class TempoAnalyzer:
         приходится максимум энергии атак.
         """
 
-    def estimate_confidence(self, tempo_map: TempoMap,
-                            onset_env: np.ndarray) -> float:
+    def estimate_confidence(self, tempo_map: TempoMap, onset_env: np.ndarray) -> float:
         """Насколько сетка совпадает с реальными атаками.
         Низкое значение = rubato или сложный ритм, интерфейсу
         стоит предупредить пользователя и предложить задать BPM руками."""
@@ -89,8 +89,7 @@ class TempoAnalyzer:
 ## `onsets.py`
 
 ```python
-def detect_onsets(audio_path: Path,
-                  hop_length: int = 256) -> npt.NDArray[np.float64]:
+def detect_onsets(audio_path: Path, hop_length: int = 256) -> npt.NDArray[np.float64]:
     """
     Вход:  аудиофайл
     Выход: массив моментов атак в секундах
@@ -100,9 +99,10 @@ def detect_onsets(audio_path: Path,
     для нашей задачи грубовато.
     """
 
-def refine_note_onsets(notes: list[NoteEvent],
-                       onsets: npt.NDArray[np.float64],
-                       max_shift: float = 0.05) -> list[NoteEvent]:
+
+def refine_note_onsets(
+    notes: list[NoteEvent], onsets: npt.NDArray[np.float64], max_shift: float = 0.05
+) -> list[NoteEvent]:
     """Подтянуть время нот к ближайшей обнаруженной атаке,
     если та не дальше max_shift. Это чистит дрожание,
     накопившееся при округлении к кадрам."""
@@ -112,6 +112,7 @@ def refine_note_onsets(notes: list[NoteEvent],
 
 ```python
 MODEL_URL = "https://zenodo.org/record/4034264/files/CRNN_note_F1=0.9677_pedal_F1=0.9186.pth"
+
 
 class ModelRegistry:
     def ensure_downloaded(self, progress=None) -> Path:

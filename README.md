@@ -186,6 +186,108 @@ flowchart LR
 | **MuseScore CLI / LilyPond** | Автоматическая вёрстка MusicXML в PDF |
 | **Qt (Qt Widgets / PySide6)** | Графический интерфейс, русская локализация |
 
+## Запуск и проверка
+
+Проект собирается по этапам, поэтому запустить можно то, что уже готово. Сейчас это **этап 2 — модуль загрузки**: ссылка или локальный файл превращаются в подготовленный видеоряд и аудиодорожку 16 кГц моно.
+
+### Быстрый старт через Docker
+
+> **Windows:** пишите команды одной строкой — обратный слеш `\` в CMD не переносит команду, а становится аргументом. Пути и ссылки всегда берите в кавычки.
+
+Единственная зависимость — Docker. FFmpeg, Python и библиотеки уже внутри образа.
+
+```bash
+git clone https://github.com/TToJlkoBHuK/Music_Information_Retrieval.git
+cd Music_Information_Retrieval
+
+docker compose build
+docker compose run --rm mir pytest tests             # 107 тестов, каждый видно отдельной строкой
+```
+
+Разбор ссылки без обращения к сети:
+
+```bash
+docker compose run --rm mir python -m scripts.ingest_cli url "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLabc&t=42"
+```
+```
+Площадка:    youtube
+Нормализация:https://www.youtube.com/watch?v=dQw4w9WgXcQ
+Ключ кэша:   0424974c68530290
+```
+
+Подготовка локального файла (положите видео в `data/videos/` — папка примонтирована):
+
+```bash
+docker compose run --rm mir python -m scripts.ingest_cli fetch "data/videos/sample.mp4" -o data/output
+```
+```
+Видео:       data/videos/sample.mp4
+Аудио:       data/output/sample.wav
+Кадры:       1920x1080 @ 29.970 fps
+Всего кадров:    5524
+```
+
+Скачивание с YouTube (из России нужен прокси):
+
+```bash
+docker compose run --rm mir python -m scripts.ingest_cli fetch "https://youtu.be/VIDEO_ID" -o data/output --proxy socks5://host.docker.internal:1080
+```
+
+Для VK Видео и Rutube прокси не нужен.
+
+### Локальная установка
+
+Нужны Python 3.10+ и FFmpeg в `PATH`.
+
+```bash
+# Windows
+winget install Gyan.FFmpeg
+python -m venv .venv && .venv\Scripts\activate
+
+# Linux
+sudo apt install ffmpeg python3-venv
+python3 -m venv .venv && source .venv/bin/activate
+
+pip install -e ".[dev,docs]"
+pytest tests -q
+```
+
+### Команды CLI
+
+| Команда | Что делает |
+|---|---|
+| `url <ссылка>` | Площадка, нормализованная ссылка, ключ кэша. Без сети |
+| `probe <источник>` | Название, длительность, разрешение. Без скачивания |
+| `fetch <источник>` | Скачать и подготовить видео с аудиодорожкой |
+| `cache` / `cache --clear` | Состояние и очистка кэша |
+
+Флаги: `-v` подробный лог, `-q` без прогресса, `--proxy`, `--no-cache`, `--max-height`.
+
+### Проверки качества
+
+Подробности по тестам — в `docs/testing.md`.
+
+```bash
+ruff check mir tests scripts     # линтер
+mypy mir                         # типизация, строгий режим (NF-16)
+pytest --cov=mir                 # покрытие (NF-17)
+```
+
+Те же проверки выполняет GitHub Actions при каждом коммите, включая прогон на Windows.
+
+### Документация
+
+Собирается автоматически из README модулей и docstrings — разойтись с кодом не может.
+
+```bash
+mkdocs serve                     # http://127.0.0.1:8000
+docker compose up docs           # то же самое в контейнере
+```
+
+При пуше в `master` документация публикуется на GitHub Pages.
+
+<hr>
+
 ## Ожидаемый результат
 
 Приложение, которое по одной ссылке на piano-visualizer-ролик выдаёт готовый к печати нотный PDF: верные высоты и длительности нот, расставленные паузы, корректные тональность, темп и размер, две партии на двух станах — без ручной калибровки, на русском языке и бесплатно.
