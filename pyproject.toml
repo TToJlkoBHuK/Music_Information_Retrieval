@@ -41,6 +41,14 @@ include = ["mir*"]
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-v --strict-markers --tb=short --durations=5"
+filterwarnings = [
+    # EncodingWarning появляется только при PYTHONWARNDEFAULTENCODING=1.
+    # Ошибкой считаем лишь свой код: за кодировки в сторонних библиотеках
+    # мы не отвечаем, а их набор различается между версиями Python.
+    "ignore::EncodingWarning",
+    "error::EncodingWarning:mir.*",
+    "error::EncodingWarning:tests.*",
+]
 markers = [
     "requires_ffmpeg: нужен установленный FFmpeg",
     "requires_gpu: нужна видеокарта с CUDA",
