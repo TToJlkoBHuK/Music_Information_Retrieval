@@ -26,8 +26,7 @@ export/
 ## `midi_writer.py`
 
 ```python
-def write_midi(transcription: Transcription, path: Path,
-               ppq: int = 480) -> Path:
+def write_midi(transcription: Transcription, path: Path, ppq: int = 480) -> Path:
     """
     Вход:  Transcription
     Выход: путь к .mid
@@ -49,8 +48,7 @@ def write_midi(transcription: Transcription, path: Path,
 ## `musicxml_writer.py`
 
 ```python
-def write_musicxml(transcription: Transcription, path: Path,
-                   compressed: bool = False) -> Path:
+def write_musicxml(transcription: Transcription, path: Path, compressed: bool = False) -> Path:
     """
     Вход:  Transcription
     Выход: путь к .musicxml (или .mxl при compressed=True)
@@ -73,6 +71,7 @@ def write_musicxml(transcription: Transcription, path: Path,
       - педаль экспортируется как PedalMark (Ped. / *).
     """
 
+
 def _validate(score: "music21.stream.Score") -> list[str]:
     """Проверка перед записью. Возвращает список проблем:
       - такты с неверной суммой длительностей
@@ -88,15 +87,16 @@ def _validate(score: "music21.stream.Score") -> list[str]:
 @dataclass
 class RenderOptions:
     page_size: str = "A4"
-    staff_size_mm: float = 7.0        # высота нотоносца
-    measures_per_line: int | None = None   # None = автоматика движка
+    staff_size_mm: float = 7.0  # высота нотоносца
+    measures_per_line: int | None = None  # None = автоматика движка
     show_measure_numbers: bool = True
     title: str | None = None
-    subtitle: str | None = None       # сюда — ссылку на исходный ролик
+    subtitle: str | None = None  # сюда — ссылку на исходный ролик
 
-def render_pdf(musicxml_path: Path, out_path: Path,
-               options: RenderOptions,
-               engine: Engine | None = None) -> Path:
+
+def render_pdf(
+    musicxml_path: Path, out_path: Path, options: RenderOptions, engine: Engine | None = None
+) -> Path:
     """
     Вход:  MusicXML
     Выход: PDF
@@ -123,6 +123,7 @@ class Engine(StrEnum):
     MUSESCORE = "musescore"
     LILYPOND = "lilypond"
 
+
 def find_engine(preferred: Engine | None = None) -> tuple[Engine, Path]:
     """
     Ищет движок вёрстки:
@@ -144,8 +145,7 @@ def find_engine(preferred: Engine | None = None) -> tuple[Engine, Path]:
 ## `metadata.py`
 
 ```python
-def build_metadata(transcription: Transcription,
-                   source_url: str | None) -> Metadata:
+def build_metadata(transcription: Transcription, source_url: str | None) -> Metadata:
     """Заголовок = название ролика (из yt-dlp), очищенное от мусора
     вроде «(Piano Tutorial)», «[Synthesia]», «| Easy».
 

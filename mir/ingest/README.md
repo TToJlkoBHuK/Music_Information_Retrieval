@@ -22,8 +22,10 @@ class Platform(StrEnum):
     LOCAL_FILE = "local"
     UNKNOWN = "unknown"
 
+
 def detect_platform(source: str) -> Platform:
     """Определить платформу по строке. Локальный путь тоже сюда."""
+
 
 def normalize_url(url: str) -> str:
     """Привести ссылку к каноническому виду: убрать трекинг-параметры,
@@ -38,16 +40,16 @@ def normalize_url(url: str) -> str:
 ```python
 @dataclass
 class DownloadOptions:
-    proxy: str | None = None          # "socks5://127.0.0.1:1080"
-    max_height: int = 1080            # выше 1080 смысла нет, только время
-    prefer_fps: int = 60              # если доступно — берём, точнее трекинг
+    proxy: str | None = None  # "socks5://127.0.0.1:1080"
+    max_height: int = 1080  # выше 1080 смысла нет, только время
+    prefer_fps: int = 60  # если доступно — берём, точнее трекинг
     timeout: int = 300
+
 
 class Downloader:
     def __init__(self, cache: MediaCache, options: DownloadOptions): ...
 
-    def fetch(self, source: str,
-              progress: Callable[[float], None] | None = None) -> Path:
+    def fetch(self, source: str, progress: Callable[[float], None] | None = None) -> Path:
         """
         Вход:  URL или путь к локальному файлу
         Выход: путь к видеофайлу на диске

@@ -1,0 +1,103 @@
+site_name: Расшифровка нот с piano-visualizer-видео
+site_description: Документация дипломного проекта по автоматической транскрипции музыки
+site_author: TToJlkoBHuK
+repo_url: https://github.com/TToJlkoBHuK/Music_Information_Retrieval
+repo_name: Music_Information_Retrieval
+docs_dir: docs
+site_dir: site
+use_directory_urls: false
+
+theme:
+  name: material
+  language: ru
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - search.highlight
+    - content.code.copy
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle:
+        icon: material/weather-night
+        name: Тёмная тема
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Светлая тема
+
+plugins:
+  - search:
+      lang: ru
+  - gen-files:
+      scripts:
+        - docs/gen_ref_pages.py
+  - literate-nav:
+      nav_file: SUMMARY.md
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [.]
+          options:
+            docstring_style: google
+            show_source: true
+            show_root_heading: true
+            show_signature_annotations: true
+            separate_signature: true
+            members_order: source
+            filters: ["!^_"]
+            merge_init_into_class: true
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Проект:
+      - Обзор: index.md
+      - Архитектура: architecture.md
+      - Требования: requirements.md
+      - Запуск и проверка: quickstart.md
+      - Как смотреть тесты: testing.md
+  - Аналитика:
+      - Обзор литературы: literature-review.md
+      - Существующие решения: competitors.md
+      - Форматы MIDI и MusicXML: formats.md
+  - Модули:
+      - Python-пакет: modules/mir.md
+      - Общие типы: modules/common.md
+      - Загрузка: modules/ingest.md
+      - Компьютерное зрение: modules/vision.md
+      - Анализ звука: modules/audio.md
+      - Слияние каналов: modules/fusion.md
+      - Нотный текст: modules/notation.md
+      - Экспорт: modules/export.md
+      - C++ ядро: modules/core.md
+      - Приложение Qt: modules/app.md
+  - Инфраструктура:
+      - Конфигурация: modules/config.md
+      - Тестирование: modules/tests.md
+      - Данные: modules/data.md
+      - Утилиты: modules/scripts.md
+  - Справочник API: reference/

@@ -30,7 +30,7 @@ pipeline = Pipeline(PipelineConfig())
 result = pipeline.run(
     source="https://www.youtube.com/watch?v=...",
     output_dir="./output",
-    progress=lambda stage, pct: print(f"{stage}: {pct:.0%}")
+    progress=lambda stage, pct: print(f"{stage}: {pct:.0%}"),
 )
 # result.pdf_path, result.midi_path, result.musicxml_path
 ```
@@ -40,13 +40,14 @@ result = pipeline.run(
 ```python
 @dataclass
 class PipelineConfig:
-    proxy: str | None = None            # для yt-dlp, актуально из-за VPN
-    quantize_strength: float = 0.7      # 0 = не квантовать, 1 = жёстко в сетку
-    force_bpm: float | None = None      # ручное переопределение темпа
-    force_key: str | None = None        # например "D major"
+    proxy: str | None = None  # для yt-dlp, актуально из-за VPN
+    quantize_strength: float = 0.7  # 0 = не квантовать, 1 = жёстко в сетку
+    force_bpm: float | None = None  # ручное переопределение темпа
+    force_key: str | None = None  # например "D major"
     force_time_signature: str | None = None
     use_gpu: bool = True
-    keep_intermediate: bool = False     # оставлять video.mp4 / audio.wav
+    keep_intermediate: bool = False  # оставлять video.mp4 / audio.wav
+
 
 @dataclass
 class PipelineResult:
@@ -54,17 +55,20 @@ class PipelineResult:
     midi_path: Path
     musicxml_path: Path
     pdf_path: Path
-    report: QualityReport               # что определилось автоматически и с какой уверенностью
+    report: QualityReport  # что определилось автоматически и с какой уверенностью
+
 
 class Pipeline:
     def __init__(self, config: PipelineConfig): ...
 
-    def run(self, source: str | Path, output_dir: Path,
-            progress: ProgressCallback | None = None) -> PipelineResult:
+    def run(
+        self, source: str | Path, output_dir: Path, progress: ProgressCallback | None = None
+    ) -> PipelineResult:
         """Полный цикл. source — URL или путь к локальному файлу."""
 
-    def rebuild(self, transcription: Transcription,
-                config: PipelineConfig, output_dir: Path) -> PipelineResult:
+    def rebuild(
+        self, transcription: Transcription, config: PipelineConfig, output_dir: Path
+    ) -> PipelineResult:
         """Пересборка нот из уже готовой транскрипции с новыми настройками.
         Нужна для интерфейса: пользователь двигает ползунок квантизации
         или правит тональность — видео заново не разбирается."""
@@ -93,10 +97,17 @@ class Pipeline:
 class MirError(Exception):
     """Базовое. Поле .user_message — текст для показа пользователю (по-русски)."""
 
-class DownloadError(MirError): ...      # видео недоступно, нет сети, нужен VPN
+
+class DownloadError(MirError): ...  # видео недоступно, нет сети, нужен VPN
+
+
 class KeyboardNotFoundError(MirError): ...  # не нашли клавиатуру — не тот формат ролика
+
+
 class TranscriptionError(MirError): ...
-class ExportError(MirError): ...        # не найден MuseScore / LilyPond
+
+
+class ExportError(MirError): ...  # не найден MuseScore / LilyPond
 ```
 
 ## Стиль и инструменты

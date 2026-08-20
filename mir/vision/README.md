@@ -28,21 +28,21 @@ class VisionAnalyzer:
         """use_native=False — принудительно медленный Python-путь.
         Нужно для сравнения реализаций в экспериментальной главе."""
 
-    def analyze(self, media: MediaBundle,
-                progress: ProgressCallback | None = None) -> VisionResult:
+    def analyze(self, media: MediaBundle, progress: ProgressCallback | None = None) -> VisionResult:
         """
         Вход:  MediaBundle (нужен video_path и fps)
         Выход: VisionResult
         Бросает: KeyboardNotFoundError — ролик не является piano visualizer
         """
 
+
 @dataclass
 class VisionResult:
-    notes: list[NoteEvent]          # source=Source.VIDEO
+    notes: list[NoteEvent]  # source=Source.VIDEO
     layout: KeyboardLayout
     profile: VisualizerProfile
     frames_processed: int
-    elapsed_sec: float              # для таблиц производительности в дипломе
+    elapsed_sec: float  # для таблиц производительности в дипломе
 ```
 
 Внутри `analyze` — по сути три строчки:
@@ -67,6 +67,7 @@ def adapt_note(raw: "mir_core.NoteEventRaw") -> NoteEvent:
         midi_velocity = round(127 * raw.velocity ** 0.7)
     Показатель 0.7 подобран эмпирически, вынести в конфиг."""
 
+
 def adapt_layout(raw: "mir_core.KeyboardLayout") -> KeyboardLayout: ...
 def adapt_profile(raw: "mir_core.VisualizerProfile") -> VisualizerProfile: ...
 ```
@@ -82,15 +83,19 @@ def draw_layout(frame: np.ndarray, layout: KeyboardLayout) -> np.ndarray:
     """Нарисовать поверх кадра границы клавиш и подписи нот.
     Сразу видно, если разметка съехала на октаву."""
 
+
 def draw_blocks(frame: np.ndarray, blocks: list[Block]) -> np.ndarray:
     """Рамки вокруг найденных блоков с id и определённой нотой."""
+
 
 def export_piano_roll(notes: list[NoteEvent], path: Path) -> None:
     """Piano-roll найденных нот в PNG. Удобно класть рядом
     с эталоном и сравнивать глазами."""
 
-def dump_frames(media: MediaBundle, timestamps: list[float],
-                out_dir: Path, layout: KeyboardLayout | None = None) -> None:
+
+def dump_frames(
+    media: MediaBundle, timestamps: list[float], out_dir: Path, layout: KeyboardLayout | None = None
+) -> None:
     """Сохранить кадры в конкретные моменты с наложенной разметкой.
     Отсюда берутся картинки для диплома."""
 ```
@@ -108,8 +113,10 @@ class FallbackAnalyzer:
     """Тот же интерфейс, что у VisionAnalyzer.
     Векторизация через numpy там, где возможно, но покадровый
     цикл всё равно остаётся узким местом."""
-    def analyze(self, media: MediaBundle,
-                progress: ProgressCallback | None = None) -> VisionResult: ...
+
+    def analyze(
+        self, media: MediaBundle, progress: ProgressCallback | None = None
+    ) -> VisionResult: ...
 ```
 
 ## Контракт этапа

@@ -6,6 +6,9 @@ data/output/*
 !data/**/.gitkeep
 !data/README.md
 
+# --- собранная документация (пересобирается из исходников) ---
+site/
+
 # --- сборка C++ ---
 build/
 cmake-build-*/

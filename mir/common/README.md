@@ -23,15 +23,18 @@ class Hand(IntEnum):
     RIGHT = 1
     UNKNOWN = 2
 
+
 class Source(IntFlag):
     """Откуда пришло событие. Флаги, чтобы VIDEO | AUDIO давало BOTH."""
+
     VIDEO = 1
     AUDIO = 2
     BOTH = VIDEO | AUDIO
 
+
 class Clef(IntEnum):
-    TREBLE = 0   # скрипичный
-    BASS = 1     # басовый
+    TREBLE = 0  # скрипичный
+    BASS = 1  # басовый
 ```
 
 ## `types.py` — главные структуры
@@ -43,13 +46,13 @@ class Clef(IntEnum):
 ```python
 @dataclass(frozen=True, slots=True)
 class NoteEvent:
-    pitch: int            # MIDI-номер: 21 (ля субконтроктавы) .. 108 (до 5-й октавы)
-    onset: float          # начало звучания, секунды от старта ролика
-    offset: float         # конец звучания, секунды
-    velocity: int         # сила нажатия, 0..127 (шкала MIDI)
+    pitch: int  # MIDI-номер: 21 (ля субконтроктавы) .. 108 (до 5-й октавы)
+    onset: float  # начало звучания, секунды от старта ролика
+    offset: float  # конец звучания, секунды
+    velocity: int  # сила нажатия, 0..127 (шкала MIDI)
     hand: Hand = Hand.UNKNOWN
     source: Source = Source.VIDEO
-    confidence: float = 1.0   # 0..1, насколько уверены в событии
+    confidence: float = 1.0  # 0..1, насколько уверены в событии
 
     @property
     def duration(self) -> float:
@@ -80,13 +83,14 @@ class KeySlot:
     x_max: int
     is_black: bool
 
+
 @dataclass(frozen=True)
 class KeyboardLayout:
-    bbox: tuple[int, int, int, int]   # x, y, width, height области клавиатуры
+    bbox: tuple[int, int, int, int]  # x, y, width, height области клавиатуры
     keys: tuple[KeySlot, ...]
     lowest_pitch: int
     highest_pitch: int
-    is_cropped: bool                  # видны не все 88 клавиш
+    is_cropped: bool  # видны не все 88 клавиш
     confidence: float
 
     def pitch_at(self, x: int) -> int | None:
@@ -104,8 +108,8 @@ class KeyboardLayout:
 ```python
 @dataclass(frozen=True)
 class TempoMap:
-    bpm: float                  # средний темп
-    beats: npt.NDArray[np.float64]      # моменты долей, секунды
+    bpm: float  # средний темп
+    beats: npt.NDArray[np.float64]  # моменты долей, секунды
     downbeats: npt.NDArray[np.float64]  # моменты сильных долей (начала тактов)
     confidence: float
 
@@ -128,24 +132,28 @@ class TempoMap:
 class Transcription:
     notes: list[NoteEvent]
     tempo: TempoMap
-    key_signature: str | None = None       # "C major", "A minor", ...
-    time_signature: tuple[int, int] | None = None   # (4, 4)
+    key_signature: str | None = None  # "C major", "A minor", ...
+    time_signature: tuple[int, int] | None = None  # (4, 4)
     measures: list[Measure] = field(default_factory=list)
     title: str | None = None
     source_url: str | None = None
 
+
 @dataclass
 class Measure:
     """Один такт. Заполняется в notation."""
+
     index: int
     start_beat: float
     end_beat: float
-    treble: list[NoteEvent | Rest]   # верхний стан
-    bass: list[NoteEvent | Rest]     # нижний стан
+    treble: list[NoteEvent | Rest]  # верхний стан
+    bass: list[NoteEvent | Rest]  # нижний стан
+
 
 @dataclass(frozen=True)
 class Rest:
     """Пауза. В MIDI её нет, но в нотном тексте нужна явно."""
+
     onset: float
     duration: float
     clef: Clef
@@ -175,14 +183,14 @@ class MediaBundle:
 class QualityReport:
     keyboard_confidence: float
     keyboard_cropped: bool
-    notes_from_video_only: int    # не подтверждены аудио
-    notes_from_audio_only: int    # не подтверждены видео
-    notes_confirmed: int          # подтверждены обоими каналами
+    notes_from_video_only: int  # не подтверждены аудио
+    notes_from_audio_only: int  # не подтверждены видео
+    notes_confirmed: int  # подтверждены обоими каналами
     detected_bpm: float
     detected_key: str
     detected_time_signature: str
-    av_offset_ms: float           # найденный рассинхрон
-    warnings: list[str]           # человекочитаемые предупреждения
+    av_offset_ms: float  # найденный рассинхрон
+    warnings: list[str]  # человекочитаемые предупреждения
 ```
 
 Отчёт нужен и интерфейсу (показать, чему можно верить), и экспериментальной главе диплома — из него собираются таблицы.
@@ -196,6 +204,8 @@ def frame_to_seconds(frame_idx: int, fps: float) -> float: ...
 def seconds_to_frame(t: float, fps: float) -> int: ...
 def seconds_to_ticks(t: float, bpm: float, ppq: int = 480) -> int:
     """Секунды → тики MIDI. ppq — тиков на четверть."""
+
+
 def ticks_to_seconds(ticks: int, bpm: float, ppq: int = 480) -> float: ...
 def beats_to_note_value(beats: float, beat_unit: int = 4) -> Fraction:
     """Длительность в долях → нотная длительность (1 = целая, 1/4 = четвертная)."""

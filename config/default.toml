@@ -1,0 +1,53 @@
+# Значения по умолчанию. Ни одно из этих чисел не должно быть
+# продублировано в коде (NF-18). Обоснование порогов — в config/README.md.
+
+[ingest]
+max_height = 1080          # выше смысла нет: клавиатура различима, время растёт
+prefer_fps = 60            # 16 мс между кадрами вместо 33 при 30 fps
+timeout_sec = 300
+cache_dir = "~/.mir_cache"
+cache_max_gb = 20.0
+proxy_mode = "auto"        # auto: прямое соединение, при неудаче — автопоиск прокси
+proxy = ""                 # заполняется только при proxy_mode = "manual"
+audio_sample_rate = 16000  # требование модели транскрипции ByteDance
+audio_channels = 1
+retries = 3
+
+[vision.keyboard]
+sample_frames = 90
+min_key_width_px = 4.0
+black_key_height_ratio = 0.6
+
+[vision.tracker]
+on_threshold = 0.25
+off_threshold = 0.15       # ниже on_threshold: это гистерезис против дребезга
+min_frames_on = 2
+velocity_gamma = 0.7
+
+[audio]
+chunk_seconds = 60.0
+overlap_seconds = 2.0
+onset_threshold = 0.3
+offset_threshold = 0.3
+hop_length = 256           # 16 мс при 16 кГц; librosa по умолчанию даёт 512
+
+[fusion]
+onset_tolerance = 0.08
+max_av_offset = 1.0
+min_offset_confidence = 0.3
+duration_weight = 0.3
+octave_artifact_ratio = 0.8
+
+[notation]
+quantize_strength = 0.7
+max_subdivision = 16
+allow_triplets = true
+min_duration_beats = 0.0625
+hand_split_pitch = 60
+dynamics_window_beats = 4.0
+
+[export]
+ppq = 480
+page_size = "A4"
+staff_size_mm = 7.0
+show_measure_numbers = true

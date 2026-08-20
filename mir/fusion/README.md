@@ -32,10 +32,12 @@ fusion/
 Первый шаг: снять постоянный сдвиг между дорожками. В роликах он встречается сплошь и рядом — от десятков миллисекунд до полусекунды.
 
 ```python
-def estimate_av_offset(video_notes: list[NoteEvent],
-                       audio_notes: list[NoteEvent],
-                       max_offset: float = 1.0,
-                       resolution: float = 0.005) -> tuple[float, float]:
+def estimate_av_offset(
+    video_notes: list[NoteEvent],
+    audio_notes: list[NoteEvent],
+    max_offset: float = 1.0,
+    resolution: float = 0.005,
+) -> tuple[float, float]:
     """
     Вход:  два списка событий
     Выход: (сдвиг в секундах, уверенность 0..1)
@@ -46,6 +48,7 @@ def estimate_av_offset(video_notes: list[NoteEvent],
 
     Положительный сдвиг = аудио отстаёт от видео.
     """
+
 
 def apply_offset(notes: list[NoteEvent], offset: float) -> list[NoteEvent]:
     """Сдвинуть все события списка. Возвращает новый список
@@ -59,9 +62,10 @@ def apply_offset(notes: list[NoteEvent], offset: float) -> list[NoteEvent]:
 ```python
 @dataclass
 class MatchConfig:
-    onset_tolerance: float = 0.08    # допуск по времени, секунды
-    pitch_tolerance: int = 0         # 0 = высота должна совпадать точно
-    duration_weight: float = 0.3     # вес длительности в функции стоимости
+    onset_tolerance: float = 0.08  # допуск по времени, секунды
+    pitch_tolerance: int = 0  # 0 = высота должна совпадать точно
+    duration_weight: float = 0.3  # вес длительности в функции стоимости
+
 
 @dataclass
 class MatchResult:
@@ -69,9 +73,10 @@ class MatchResult:
     video_only: list[NoteEvent]
     audio_only: list[NoteEvent]
 
-def match_notes(video_notes: list[NoteEvent],
-                audio_notes: list[NoteEvent],
-                config: MatchConfig) -> MatchResult:
+
+def match_notes(
+    video_notes: list[NoteEvent], audio_notes: list[NoteEvent], config: MatchConfig
+) -> MatchResult:
     """
     Сопоставление как задача о назначениях.
 
@@ -103,10 +108,11 @@ def match_notes(video_notes: list[NoteEvent],
 ```python
 @dataclass
 class ResolverContext:
-    layout: KeyboardLayout        # знаем, обрезана ли клавиатура
-    video_quality: float          # оценка качества видеоканала
+    layout: KeyboardLayout  # знаем, обрезана ли клавиатура
+    video_quality: float  # оценка качества видеоканала
     audio_quality: float
     tempo: TempoMap
+
 
 def resolve_video_only(note: NoteEvent, ctx: ResolverContext) -> NoteEvent | None:
     """
@@ -129,6 +135,7 @@ def resolve_video_only(note: NoteEvent, ctx: ResolverContext) -> NoteEvent | Non
       - очень короткая
       - низкая confidence детекции
     """
+
 
 def resolve_audio_only(note: NoteEvent, ctx: ResolverContext) -> NoteEvent | None:
     """
@@ -153,10 +160,9 @@ def resolve_audio_only(note: NoteEvent, ctx: ResolverContext) -> NoteEvent | Non
 ## `merger.py`
 
 ```python
-def merge(video_result: VisionResult,
-          audio_result: AudioResult,
-          tempo: TempoMap,
-          config: FusionConfig) -> FusionResult:
+def merge(
+    video_result: VisionResult, audio_result: AudioResult, tempo: TempoMap, config: FusionConfig
+) -> FusionResult:
     """
     Полная последовательность:
       1. estimate_av_offset → apply_offset (выравнивание)
@@ -176,11 +182,13 @@ def merge(video_result: VisionResult,
       confidence ← 1 - (1-c_v)(1-c_a), формула объединения независимых оценок
     """
 
+
 @dataclass
 class FusionResult:
     notes: list[NoteEvent]
     av_offset: float
     stats: FusionStats
+
 
 @dataclass
 class FusionStats:
