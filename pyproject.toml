@@ -73,7 +73,12 @@ target-version = "py310"
 exclude = ["build", "core", "site"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "RUF", "D"]
+# PLW1514 (чтение и запись файлов без явной кодировки) пока в preview.
+# Правило важное: Windows — целевая платформа (NF-11), а там кодировка
+# по умолчанию не UTF-8, и русский текст падает с UnicodeEncodeError.
+preview = true
+explicit-preview-rules = true
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "RUF", "D", "PLW1514"]
 ignore = [
     "D203",   # конфликтует с D211
     "D213",   # конфликтует с D212

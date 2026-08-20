@@ -41,6 +41,15 @@ jobs:
       - name: Тесты с покрытием (NF-17)
         run: pytest tests --cov=mir --cov-report=term-missing --cov-report=xml
 
+      # Windows берёт кодировку из системных настроек, а не UTF-8 (NF-11).
+      # Любое чтение или запись файла без явного encoding там сломается
+      # на кириллице. Ruff ловит только явные Path(...).write_text(),
+      # эта проверка — все остальные случаи.
+      - name: Явная кодировка при работе с файлами
+        env:
+          PYTHONWARNDEFAULTENCODING: 1
+        run: python -W error::EncodingWarning -m pytest tests -q
+
       - name: Выгрузить покрытие
         if: matrix.python-version == '3.12'
         uses: actions/upload-artifact@v4

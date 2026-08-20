@@ -130,7 +130,7 @@ class TestResolveSource:
 
     def test_bad_extension(self, tmp_path: Path) -> None:
         doc = tmp_path / "notes.txt"
-        doc.write_text("x")
+        doc.write_text("x", encoding="utf-8")
         with pytest.raises(UnsupportedSourceError, match="расширение"):
             resolve_source(doc)
 

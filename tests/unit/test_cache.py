@@ -57,7 +57,7 @@ class TestPutGet:
     def test_broken_index_recovers(self, tmp_path: Path) -> None:
         root = tmp_path / "c"
         root.mkdir(parents=True)
-        (root / "index.json").write_text("{ это не json")
+        (root / "index.json").write_text("{ это не json", encoding="utf-8")
         assert len(MediaCache(root)) == 0
 
 

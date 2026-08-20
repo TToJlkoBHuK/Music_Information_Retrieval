@@ -112,7 +112,7 @@ def running_in_container() -> bool:
     if os.environ.get("MIR_IN_CONTAINER"):
         return True
     try:
-        return "docker" in Path("/proc/1/cgroup").read_text()
+        return "docker" in Path("/proc/1/cgroup").read_text(encoding="utf-8")
     except OSError:
         return False
 
