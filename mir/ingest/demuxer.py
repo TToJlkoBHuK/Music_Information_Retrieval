@@ -3,6 +3,13 @@
 Видео не перекодируется: `vision` читает исходный файл покадрово,
 а перекодирование заняло бы минуты и ухудшило качество, важное
 для детекции. Извлекается только аудио.
+
+Вызовы FFmpeg всегда с `encoding="utf-8", errors="replace"`. Без этого
+вывод декодируется в системной кодировке, и на Windows (cp1251) русское
+название ролика в сообщении об ошибке превращается в мусор либо роняет
+программу. `errors="replace"` нужен на случай, когда FFmpeg всё же выдаёт
+байты в другой кодировке: нам важны код возврата и текст ошибки, а не
+побайтовая точность.
 """
 
 from __future__ import annotations
@@ -113,7 +120,13 @@ class Demuxer:
         ]
         try:
             completed = subprocess.run(
-                command, capture_output=True, text=True, timeout=60, check=True
+                command,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=60,
+                check=True,
             )
         except subprocess.CalledProcessError as exc:
             raise DemuxError(
@@ -187,7 +200,14 @@ class Demuxer:
         ]
         _log.info("извлечение аудио: %s → %s", video_path.name, out_path.name)
         try:
-            subprocess.run(command, capture_output=True, text=True, check=True)
+            subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=True,
+            )
         except subprocess.CalledProcessError as exc:
             raise DemuxError(
                 f"ffmpeg не смог извлечь аудио: {exc.stderr}",

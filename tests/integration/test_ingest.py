@@ -88,3 +88,25 @@ class TestIngestPipeline:
     ) -> None:
         with pytest.raises(DemuxError, match="аудиодорожк"):
             ingest(silent_video, config=config, work_dir=tmp_path / "work")
+
+    def test_cyrillic_filename(self, sample_video: Path, tmp_path: Path, config: MirConfig) -> None:
+        """Названия роликов обычно на русском — вывод FFmpeg должен читаться.
+
+        Без явной кодировки в subprocess на Windows (cp1251) здесь был бы
+        мусор в сообщениях или UnicodeDecodeError.
+        """
+        russian = tmp_path / "Шопен — Ноктюрн соч. 9 № 2.mp4"
+        russian.write_bytes(sample_video.read_bytes())
+
+        bundle = ingest(russian, config=config, work_dir=tmp_path / "work")
+        assert bundle.audio_path.exists()
+        assert bundle.fps > 0
+
+    def test_error_message_readable_for_cyrillic(self, tmp_path: Path, config: MirConfig) -> None:
+        """Ошибка на файле с русским именем остаётся читаемой."""
+        broken = tmp_path / "Битый файл.mp4"
+        broken.write_bytes(b"not a video")
+
+        with pytest.raises(DemuxError) as info:
+            ingest(broken, config=config, work_dir=tmp_path / "work")
+        assert "Битый файл.mp4" in info.value.user_message
