@@ -24,6 +24,7 @@ MODULE_READMES: dict[str, Path] = {
     "common": Path("mir/common/README.md"),
     "ingest": Path("mir/ingest/README.md"),
     "vision": Path("mir/vision/README.md"),
+    "eval": Path("mir/eval/README.md"),
     "audio": Path("mir/audio/README.md"),
     "fusion": Path("mir/fusion/README.md"),
     "notation": Path("mir/notation/README.md"),

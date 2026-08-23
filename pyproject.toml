@@ -14,6 +14,11 @@ authors = [{ name = "TToJlkoBHuK" }]
 dependencies = [
     "yt-dlp>=2024.1.0",
     "tomli>=2.0; python_version < '3.11'",
+    # Декодирование видео и обработка кадров. Нужен именно
+    # opencv-python-headless: серверный и контейнерный запуск не имеют
+    # графической подсистемы, а полный пакет тянет GTK и падает без неё.
+    "opencv-python-headless>=4.8",
+    "numpy>=1.24",
 ]
 
 [project.optional-dependencies]
@@ -23,6 +28,10 @@ dev = [
     "pytest-html>=4.1",
     "mypy>=1.8",
     "ruff>=0.3",
+    # Сборка нативного ядра. Не в основных зависимостях: без компилятора
+    # проект работает на запасной реализации из mir.vision.accel.
+    "pybind11>=2.11",
+    "cmake>=3.18",
 ]
 docs = [
     "mkdocs-material>=9.5",
@@ -72,8 +81,12 @@ module = ["yt_dlp.*", "tomli.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+# Тестам аннотация возвращаемого типа не нужна: он всегда None,
+# и требование засорило бы каждый тест строкой без смысла.
 module = ["tests.*"]
 disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
 
 [tool.ruff]
 line-length = 100

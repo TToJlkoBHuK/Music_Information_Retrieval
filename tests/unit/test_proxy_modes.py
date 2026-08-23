@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -26,6 +27,16 @@ def _config(mode: str, proxy: str = "") -> Any:
 @pytest.fixture
 def cache(tmp_path: Any) -> MediaCache:
     return MediaCache(tmp_path / "cache")
+
+
+def _counting_probe(calls: dict[str, int]) -> Callable[[], str]:
+    """Заглушка автопоиска прокси, считающая обращения к себе."""
+
+    def probe() -> str:
+        calls["count"] += 1
+        return "socks5://x:1"
+
+    return probe
 
 
 class TestFirstAttempt:
@@ -98,7 +109,7 @@ class TestAutodetect:
         calls = {"count": 0}
         monkeypatch.setattr(
             "mir.ingest.proxycheck.autodetect_proxy",
-            lambda: calls.__setitem__("count", calls["count"] + 1) or "socks5://x:1",
+            _counting_probe(calls),
         )
         downloader = Downloader(_config("auto").ingest, cache)
 

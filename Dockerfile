@@ -1,10 +1,10 @@
 # Окружение для запуска и проверки модулей проекта.
-# FFmpeg внутри — единственная системная зависимость этапа 2.
+# FFmpeg нужен этапу 2, компилятор — сборке нативного ядра этапа 3.
 
 FROM python:3.12-slim AS base
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends ffmpeg g++ make \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PYTHONUNBUFFERED=1 \
@@ -22,6 +22,11 @@ COPY mir/__init__.py mir/
 RUN pip install -e ".[dev,docs]"
 
 COPY . .
+
+# Ядро собирается в образ: без него всё работает, но медленнее.
+RUN cmake -B core/build -S core -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build core/build --config Release \
+    && rm -rf core/build
 
 VOLUME ["/cache", "/app/data"]
 

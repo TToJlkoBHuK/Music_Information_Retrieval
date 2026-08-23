@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import socket
 import threading
+from collections.abc import Iterator
 
 import pytest
 
@@ -11,7 +12,7 @@ from mir.ingest.proxycheck import COMMON_PROXY_PORTS, check_proxy
 
 
 @pytest.fixture
-def listening_port() -> int:
+def listening_port() -> Iterator[int]:
     """Поднять слушающий сокет на свободном порту."""
     server = socket.socket()
     server.bind(("127.0.0.1", 0))

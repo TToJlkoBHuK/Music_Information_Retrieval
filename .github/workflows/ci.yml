@@ -36,10 +36,27 @@ jobs:
         run: ruff format --check mir tests scripts
 
       - name: Типизация (NF-16)
-        run: mypy mir
+        run: mypy mir scripts tests
+
+      # Ядро собирается до тестов: без него тесты пройдут на запасной
+      # реализации и молча не проверят C++.
+      - name: Собрать нативное ядро
+        run: |
+          cmake -B core/build -S core -DCMAKE_BUILD_TYPE=Release
+          cmake --build core/build --config Release
+
+      - name: Тесты ядра (C++)
+        run: ./core/build/mir_core_tests
+
+      - name: Ядро действительно загружается
+        run: python -c "from mir.vision import accel; assert accel.HAS_NATIVE, 'ядро не найдено'; print(accel.backend_name())"
 
       - name: Тесты с покрытием (NF-17)
         run: pytest tests --cov=mir --cov-report=term-missing --cov-report=xml
+
+      - name: Сравнение ядра с numpy
+        if: matrix.python-version == '3.12'
+        run: python scripts/bench_core.py --repeats 20
 
       # Windows берёт кодировку из системных настроек, а не UTF-8 (NF-11).
       # Любое чтение или запись файла без явного encoding там сломается
@@ -72,9 +89,19 @@ jobs:
         run: choco install ffmpeg -y --no-progress
 
       - name: Установить зависимости
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev]" pybind11
 
-      - name: Тесты
+      # Отдельная проверка того, что проект работает и без ядра:
+      # у пользователя компилятора может не быть.
+      - name: Тесты на запасной реализации
+        run: pytest tests -q
+
+      - name: Собрать нативное ядро
+        run: |
+          cmake -B core/build -S core -DCMAKE_BUILD_TYPE=Release
+          cmake --build core/build --config Release
+
+      - name: Тесты с ядром
         run: pytest tests -q
 
   docs:

@@ -1,254 +1,112 @@
-# core — C++ ядро компьютерного зрения
+# core — нативное ядро
 
-Самая нагруженная часть проекта: покадровый разбор видеоряда. Собирается в нативный Python-модуль `mir_core` через pybind11.
+Горячий цикл покадрового разбора на C++. Собирается в модуль Python `mir_core` через pybind11.
 
-## Зачем C++
+## Зачем и что именно
 
-Ролик 4 минуты при 30 fps — 7200 кадров. На каждом нужно:
+Ролик 4 минуты при 30 fps — 7200 кадров. На каждом нужно усреднить цвет по 88 областям клавиш и сравнить с эталоном. Это порядка 10⁶ обращений к памяти изображения; на Python цикл по 88 маленьким срезам numpy тратит больше времени на накладные расходы, чем на сам счёт.
 
-- проверить состояние 88 клавиш (сравнение цвета с эталоном),
-- отсегментировать и сопоставить с предыдущим кадром десятки падающих блоков.
+Замер на кадре 1920×1080, 88 клавиш (`python scripts/bench_core.py`):
 
-Это порядка 10⁶ операций над областями изображения. Python с построчными циклами тут проседает, а векторизовать логику трекинга через numpy неудобно. C++ с OpenCV решает задачу за секунды.
+| операция | C++ | numpy | ускорение |
+|---|---:|---:|---:|
+| `key_deviations`, 1 кадр | 0.107 мс | 2.945 мс | **27.5×** |
+| `median_frame`, 25 кадров | 96.9 мс | 107.1 мс | 1.1× |
+
+В пересчёте на четырёхминутный ролик: 0.8 с против 21.2 с.
+
+Медиана ускорения почти не даёт — `np.median` уже реализована на C и работает над непрерывным блоком памяти. Это честный результат: переносить в C++ имеет смысл не всё подряд, а циклы с мелкими нерегулярными обращениями, которые numpy векторизовать не умеет. Медиана оставлена в ядре ради единственной точки входа, а не ради скорости.
+
+### Почему на коротком ролике выигрыш меньше 27×
+
+Замер полного разбора семисекундного ролика 1280×720 даёт 7.4 с с ядром против 9.1 с без него — около 20 %, а не 27 раз. Противоречия здесь нет: на таком ролике время съедают декодирование H.264 и `cv2.cvtColor`, которые в обеих ветках одни и те же, а сегментация блоков вообще не затронута переносом.
+
+Разница между 27× и 20 % — это и есть доля, которую покадровое сравнение клавиш занимает в общем времени. Чем длиннее ролик и чем выше разрешение, тем эта доля больше: на четырёхминутном ролике 1920×1080 одна только эта операция стоит 21 с на numpy против 0.8 с в C++.
+
+## Ключевое решение: без OpenCV в C++
+
+Ядро работает над сырыми буферами numpy и не включает ни одного заголовка OpenCV. Декодирование видео остаётся на стороне Python, где `opencv-python` ставится одной командой pip.
+
+Альтернатива — собирать C++-часть OpenCV — потребовала бы от каждого, кто клонирует репозиторий, отдельной сборки библиотеки на 200 МБ, а под Windows ещё и совпадения версии компилятора. Взамен ядро зависит только от pybind11 и стандартной библиотеки, а вся сборка укладывается в две команды.
+
+Цена решения: в C++ нет сегментации блоков и фазовой корреляции — они остаются в Python поверх функций OpenCV. Это осознанный размен: те операции вызываются реже и уже реализованы эффективно.
 
 ## Структура
 
 ```
 core/
-├── include/mir_core/     публичные заголовки (то, что видит внешний мир)
-│   ├── types.hpp             структуры данных
-│   ├── keyboard_detector.hpp детекция и разметка клавиатуры
-│   ├── key_tracker.hpp       отслеживание подсветки клавиш
-│   ├── block_tracker.hpp     трекинг падающих блоков
-│   ├── calibration.hpp       автокалибровка под визуализатор
-│   └── video_analyzer.hpp    фасад: единая точка входа
-├── src/                  реализация (.cpp)
-├── bindings/             pybind11-обёртка
-│   └── module.cpp
-├── tests/                C++ юнит-тесты (Catch2 или GoogleTest)
+├── include/mir_core/
+│   ├── types.hpp          KeyRegion, ColorHsv, DeviationWeights
+│   └── key_metrics.hpp    объявления горячих функций
+├── src/key_metrics.cpp    реализация
+├── bindings/module.cpp    обёртка pybind11
+├── tests/test_key_metrics.cpp
 └── CMakeLists.txt
 ```
 
-Правило: заголовки в `include/mir_core/` — это публичный контракт. Всё, что не должно быть видно снаружи (вспомогательные функции, детали реализации), живёт только в `src/`.
-
-## Типы данных (`types.hpp`)
-
-Зеркалят Python-модель из `mir/common/`. При изменении одного нужно менять оба.
+## Что делает
 
 ```cpp
-namespace mir {
+// Средний цвет пробы внутри клавиши.
+ColorHsv sampleRegion(const std::uint8_t* frame, int width, int height,
+                      const KeyRegion& region, float inset = kSampleInset);
 
-enum class Hand : uint8_t { Left = 0, Right = 1, Unknown = 2 };
+// Расстояние между цветами, 0..1.
+float deviation(const ColorHsv& current, const ColorHsv& reference,
+                const DeviationWeights& weights = {});
 
-// Одна клавиша на изображении
-struct KeySlot {
-    int  pitch;        // MIDI-номер: 21 (A0) .. 108 (C8)
-    int  x_min;        // левая граница в пикселях
-    int  x_max;        // правая граница
-    bool is_black;     // чёрная клавиша (уже, выше по кадру)
-};
+// Основная функция: отклонения всех клавиш за один проход по кадру.
+void keyDeviations(const std::uint8_t* frame, int width, int height,
+                   const KeyRegion* regions, const ColorHsv* references,
+                   std::size_t count, float* out,
+                   const DeviationWeights& weights = {},
+                   float inset = kSampleInset);
 
-// Результат детекции клавиатуры
-struct KeyboardLayout {
-    cv::Rect             bbox;           // область клавиатуры в кадре
-    std::vector<KeySlot> keys;           // слева направо
-    int                  lowest_pitch;   // реально видимый диапазон
-    int                  highest_pitch;
-    bool                 is_cropped;     // видны не все 88 клавиш
-    float                confidence;     // 0..1, качество детекции
-};
-
-// Событие нажатия/отпускания, найденное по видео
-struct NoteEventRaw {
-    int   pitch;
-    float onset;        // секунды от начала ролика
-    float offset;
-    float velocity;     // 0..1, оценка по яркости; в MIDI масштабируется до 0..127
-    Hand  hand;
-    float confidence;
-};
-
-// Параметры визуализатора, полученные автокалибровкой
-struct VisualizerProfile {
-    cv::Scalar background_hsv;
-    std::vector<cv::Scalar> block_colors;  // 1..N кластеров цветов блоков
-    float fall_speed_px_per_sec;           // скорость падения блоков
-    int   hit_line_y;                      // y-координата линии касания клавиатуры
-};
-
-} // namespace mir
+// Попиксельная медиана стопки кадров.
+void medianFrame(const std::uint8_t* const* frames, std::size_t count, int width,
+                 int height, int channels, std::uint8_t* out);
 ```
 
-## Классы
+Две детали реализации стоят упоминания:
 
-### `KeyboardDetector` (`keyboard_detector.hpp`)
+* `deviation` замыкает тон по кругу и глушит его вклад у бесцветных пикселей — обоснование в `mir/vision/README.md`, формула обязана совпадать с запасной реализацией на numpy до 1e-4;
+* `medianFrame` использует `std::nth_element`, а не сортировку: нужен только средний элемент, O(n) против O(n log n) на каждый пиксель кадра.
 
-Находит клавиатуру и строит карту клавиш. Работает один раз в начале обработки.
+## Биндинги
 
-```cpp
-class KeyboardDetector {
-public:
-    struct Params {
-        int   sample_frames    = 90;    // сколько кадров усреднять
-        float min_key_width_px = 4.0f;  // отсев мусора
-        float black_key_ratio  = 0.6f;  // ожидаемая высота чёрной клавиши
-    };
+Границы клавиш и эталонные цвета приходят массивами numpy, наружу возвращаются тоже массивы: копирование поштучно съело бы весь выигрыш.
 
-    explicit KeyboardDetector(Params p = {});
-
-    // Вход:  кадры из разных мест ролика (для медианы)
-    // Выход: разметка клавиатуры; бросает DetectionError, если не нашёл
-    KeyboardLayout detect(const std::vector<cv::Mat>& frames);
-
-private:
-    cv::Mat buildMedianFrame(const std::vector<cv::Mat>& frames);
-    cv::Rect findKeyboardBand(const cv::Mat& median);
-    std::vector<int> findKeyBoundaries(const cv::Mat& band);
-    // Ключевой шаг: привязка к абсолютным высотам по шаблону
-    // чередования чёрных клавиш (группы по 2 и 3)
-    std::vector<KeySlot> assignPitches(const std::vector<int>& boundaries,
-                                       const std::vector<bool>& is_black);
-};
-```
-
-**Как работает.** Берём кадры равномерно по ролику и считаем попиксельную медиану — подсветка и падающие блоки исчезают, остаётся «пустая» клавиатура. Ищем горизонтальную полосу с регулярным чёрно-белым узором (Canny + проекция градиентов на ось X: у клавиатуры характерный периодический профиль). Внутри полосы находим границы клавиш и определяем, какие из них чёрные (темнее, выше по кадру). Дальше главное: сопоставляем найденный узор чёрных клавиш с эталонным шаблоном октавы (2-3-2-3…). Это даёт однозначную привязку к абсолютным нотам даже при обрезанном кадре — именно здесь аналоги требуют ручной калибровки.
-
-### `KeyTracker` (`key_tracker.hpp`)
-
-Отслеживает подсветку клавиш покадрово.
-
-```cpp
-class KeyTracker {
-public:
-    struct Params {
-        float on_threshold  = 0.25f;  // порог включения (доля отличия от эталона)
-        float off_threshold = 0.15f;  // порог выключения — ниже, это гистерезис
-        int   min_frames_on = 2;      // антидребезг
-    };
-
-    KeyTracker(const KeyboardLayout& layout, const cv::Mat& reference_frame, Params p = {});
-
-    // Вход:  очередной кадр и его временная метка
-    // Выход: события, завершившиеся на этом кадре
-    std::vector<NoteEventRaw> processFrame(const cv::Mat& frame, float timestamp);
-
-    // Закрыть все ещё «нажатые» ноты в конце ролика
-    std::vector<NoteEventRaw> flush(float end_timestamp);
-
-private:
-    KeyboardLayout layout_;
-    std::vector<cv::Scalar> reference_hsv_;     // эталонный цвет каждой клавиши
-    std::vector<bool>       is_pressed_;
-    std::vector<float>      press_start_;
-};
-```
-
-**Почему гистерезис.** Два разных порога на включение и выключение: иначе на границе шум сжатия даёт дребезг — одна нота распадается на десяток коротких. Работа в HSV, а не в RGB: канал Hue устойчив к изменению яркости, важно при свечении и частицах.
-
-### `BlockTracker` (`block_tracker.hpp`)
-
-Отслеживает падающие блоки. Даёт более точные длительности, чем подсветка клавиш, и «видит» ноту заранее.
-
-```cpp
-struct Block {
-    int      id;
-    cv::Rect bbox;
-    cv::Scalar color_hsv;
-    int      pitch;          // по x-координате центра через KeyboardLayout
-    Hand     hand;           // по цвету
-    float    first_seen;
-    bool     has_landed;
-};
-
-class BlockTracker {
-public:
-    BlockTracker(const KeyboardLayout& layout, const VisualizerProfile& profile);
-
-    // Вход:  кадр + метка времени
-    // Выход: ноты, чьи блоки коснулись клавиатуры на этом кадре
-    std::vector<NoteEventRaw> processFrame(const cv::Mat& frame, float timestamp);
-
-private:
-    std::vector<Block> segmentBlocks(const cv::Mat& frame);
-    void matchWithPrevious(std::vector<Block>& current, float dt);
-    // Момент касания считается интерполяцией траектории,
-    // а не номером кадра: при 30 fps шаг 33 мс — для трелей слишком грубо
-    float interpolateHitTime(const Block& b, float timestamp, float dt);
-};
-```
-
-**Ключевая деталь.** Длина блока в пикселях делится на скорость падения (`fall_speed_px_per_sec` из профиля) и даёт длительность ноты в секундах напрямую — точнее, чем измерение по кадрам подсветки. Момент касания линии клавиатуры вычисляется линейной интерполяцией между двумя соседними кадрами, что поднимает временное разрешение с 33 мс до единиц миллисекунд.
-
-### `Calibrator` (`calibration.hpp`)
-
-Определяет параметры конкретного визуализатора по первым секундам ролика.
-
-```cpp
-class Calibrator {
-public:
-    // Вход:  первые N секунд кадров + разметка клавиатуры
-    // Выход: профиль визуализатора
-    static VisualizerProfile calibrate(const std::vector<cv::Mat>& frames,
-                                       const KeyboardLayout& layout);
-};
-```
-
-Что определяет: цвет фона (мода по верхней зоне), цвета блоков (k-means по HSV пикселей, не относящихся к фону), скорость падения (кросс-корреляция вертикальных срезов соседних кадров), y-координату линии касания (верхняя граница `layout.bbox`).
-
-### `VideoAnalyzer` (`video_analyzer.hpp`)
-
-Фасад — то, что видит Python. Скрывает порядок вызовов остальных классов.
-
-```cpp
-class VideoAnalyzer {
-public:
-    struct Result {
-        std::vector<NoteEventRaw> notes;
-        KeyboardLayout            layout;
-        VisualizerProfile         profile;
-        float                     fps;
-        float                     duration;
-    };
-
-    // Вход:  путь к видеофайлу, колбэк прогресса (0..1)
-    // Выход: все события + метаданные разбора
-    Result analyze(const std::string& video_path,
-                   const std::function<void(float)>& progress = nullptr);
-};
-```
-
-## Биндинги (`bindings/module.cpp`)
-
-```cpp
-PYBIND11_MODULE(mir_core, m) {
-    py::class_<KeySlot>(m, "KeySlot")
-        .def_readonly("pitch", &KeySlot::pitch)
-        .def_readonly("x_min", &KeySlot::x_min)
-        .def_readonly("x_max", &KeySlot::x_max)
-        .def_readonly("is_black", &KeySlot::is_black);
-    // ... остальные структуры
-    py::class_<VideoAnalyzer>(m, "VideoAnalyzer")
-        .def(py::init<>())
-        .def("analyze", &VideoAnalyzer::analyze,
-             py::arg("video_path"), py::arg("progress") = nullptr,
-             py::call_guard<py::gil_scoped_release>());  // отпускаем GIL на время работы
-}
-```
-
-`gil_scoped_release` обязателен: без него на время анализа видео зависает весь Python, включая обновление интерфейса.
+На время счёта отпускается GIL (`py::gil_scoped_release`). Без этого интерфейс приложения замирал бы на всё время обработки ролика.
 
 ## Сборка
 
-```bash
-cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release
+```
+cmake -B core/build -S core -DCMAKE_BUILD_TYPE=Release
+cmake --build core/build --config Release
 ```
 
-Зависимости: OpenCV 4.x, pybind11, Python 3.10+. Готовый модуль (`mir_core.pyd` на Windows, `mir_core.so` на Linux) кладётся туда, где его найдёт Python.
+Готовый модуль (`mir_core.pyd` на Windows, `mir_core.so` на Linux) кладётся прямо в `mir/vision/`, где его найдёт обычный `import`.
 
-## Что тестировать (`core/tests/`)
+Зависимости: компилятор с C++17, CMake 3.18+, pybind11 (`pip install pybind11`). Всё это входит в `pip install -e ".[dev]"`.
 
-- `assignPitches` на синтетических шаблонах клавиатуры, в том числе обрезанных с обеих сторон
-- гистерезис `KeyTracker` на последовательности с искусственным шумом
-- `interpolateHitTime` — сравнение с аналитически известным ответом
-- полный `VideoAnalyzer` на коротком синтетическом ролике, сгенерированном из известного MIDI
+Проверить, что ядро подхватилось:
+
+```
+python -c "from mir.vision import accel; print(accel.backend_name())"
+```
+
+## Тесты
+
+```
+./core/build/mir_core_tests
+```
+
+16 проверок: усреднение по области, поведение на области за границей кадра, замыкание тона, приглушение тона у бесцветных цветов, отклонение подсвеченной и соседней клавиш, медиана с выбросом.
+
+Вместо Catch2 или GoogleTest — своя мини-проверка на 30 строк: эти рамки тянут загрузку зависимостей при сборке, а проверок здесь два десятка.
+
+Дополнительно `tests/unit/test_accel.py` сравнивает ядро с запасной реализацией на общих данных: расхождение означало бы, что результат зависит от наличия компилятора.
+
+## Ядро необязательно
+
+Проект работает и без собранного ядра — [`mir.vision.accel`][] переключается на numpy. Делать компилятор обязательным нельзя: пользователь приложения его не имеет.

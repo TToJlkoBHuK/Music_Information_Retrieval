@@ -23,6 +23,7 @@ on_threshold = 0.25
 off_threshold = 0.15       # ниже on_threshold: это гистерезис против дребезга
 min_frames_on = 2
 velocity_gamma = 0.7
+min_note_duration = 0.06  # короче — обрывок блока, а не нота
 
 [audio]
 chunk_seconds = 60.0

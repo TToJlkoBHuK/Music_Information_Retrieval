@@ -89,6 +89,7 @@ nav:
       - Общие типы: modules/common.md
       - Загрузка: modules/ingest.md
       - Компьютерное зрение: modules/vision.md
+      - Метрики качества: modules/eval.md
       - Анализ звука: modules/audio.md
       - Слияние каналов: modules/fusion.md
       - Нотный текст: modules/notation.md
