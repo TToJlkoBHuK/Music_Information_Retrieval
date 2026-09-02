@@ -11,10 +11,11 @@ from typing import Any
 
 import pytest
 
+from mir.common.enums import Platform
 from mir.common.errors import ConfigError
 from mir.config import load_config
 from mir.ingest.cache import MediaCache
-from mir.ingest.downloader import Downloader
+from mir.ingest.downloader import Downloader, _explain
 
 
 def _config(mode: str, proxy: str = "") -> Any:
@@ -136,3 +137,32 @@ class TestValidation:
     def test_manual_requires_address(self) -> None:
         with pytest.raises(ConfigError, match="manual"):
             _config("manual")
+
+
+class TestExternalToolHints:
+    """Отсутствие внешней программы не должно выглядеть как сбой сети."""
+
+    def test_missing_ffmpeg_is_named(self):
+        hint = _explain(
+            "ERROR: You have requested merging of multiple formats "
+            "but ffmpeg is not installed. Aborting",
+            Platform.YOUTUBE,
+            "",
+        )
+
+        assert "FFmpeg" in hint
+        assert "VPN" not in hint
+
+    def test_missing_js_runtime_is_named(self):
+        hint = _explain(
+            "WARNING: [youtube] No supported JavaScript runtime could be found",
+            Platform.YOUTUBE,
+            "",
+        )
+
+        assert "JavaScript" in hint
+
+    def test_network_failure_still_suggests_vpn(self):
+        hint = _explain("Unable to download webpage: getaddrinfo failed", Platform.YOUTUBE, "")
+
+        assert "VPN" in hint
