@@ -41,6 +41,7 @@ set "CMD=%~1"
 shift
 
 if /i "%CMD%"=="demo"     ( %PY% scripts\vision_cli.py demo %1 %2 %3 %4 %5 %6 %7 %8 %9 & exit /b !errorlevel! )
+if /i "%CMD%"=="diagnose" ( %PY% scripts\vision_cli.py diagnose %1 %2 %3 %4 %5 %6 %7 %8 %9 & exit /b !errorlevel! )
 if /i "%CMD%"=="analyze"  ( %PY% scripts\vision_cli.py analyze %1 %2 %3 %4 %5 %6 %7 %8 %9 & exit /b !errorlevel! )
 if /i "%CMD%"=="fetch"    ( %PY% scripts\ingest_cli.py fetch %1 %2 %3 %4 %5 %6 %7 %8 %9 & exit /b !errorlevel! )
 if /i "%CMD%"=="info"     ( %PY% scripts\ingest_cli.py probe %1 %2 %3 %4 %5 %6 %7 %8 %9 & exit /b !errorlevel! )
@@ -55,6 +56,7 @@ echo Использование: run ^<команда^> [аргументы]
 echo.
 echo   demo      синтетический ролик с известным ответом
 echo   analyze   разбор своего ролика
+echo   diagnose  почему детекция не сработала
 echo   fetch     скачать ролик по ссылке
 echo   info      сведения о ролике без скачивания
 echo   doctor    диагностика сети и FFmpeg
