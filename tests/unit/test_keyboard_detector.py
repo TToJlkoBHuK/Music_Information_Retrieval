@@ -170,7 +170,7 @@ def test_period_found_for_wide_keys():
     """Обрезанная клавиатура: клавиш мало, каждая широкая."""
     frame = np.full((400, 480, 3), 25, dtype=np.uint8)
     strip = np.full((100, 480, 3), 240, dtype=np.uint8)
-    for x in range(0, 480, 60):
+    for x in range(0, 480, 40):
         strip[:, x : x + 2] = 40
     frame[240:340] = strip
 
@@ -178,7 +178,7 @@ def test_period_found_for_wide_keys():
     profile = detector._gap_profile(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), _band(240, 340))
     period, _ = detector._estimate_period(profile)
 
-    assert period == pytest.approx(60.0, abs=2.0)
+    assert period == pytest.approx(40.0, abs=2.0)
 
 
 def test_black_keys_survive_uneven_lighting():
