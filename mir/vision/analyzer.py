@@ -35,6 +35,12 @@ _log = get_logger(__name__)
 _CALIBRATION_FRAMES = 25
 """Сколько подряд идущих кадров нужно для замера скорости падения."""
 
+_CALIBRATION_AT = 0.4
+"""В какой точке ролика замерять скорость падения, доля длины.
+
+Не в начале: там заставка, где блоки не движутся вовсе.
+"""
+
 _HAND_MATCH_TOLERANCE = 0.12
 """Допуск сопоставления событий подсветки и блоков, секунды."""
 
@@ -195,7 +201,14 @@ def analyze_video(
         layout = KeyboardDetector(config.vision.keyboard).detect(sample)
         reference = build_median_frame(sample)
 
-        calibration_start = min(int(media.fps * 2), max(media.frame_count - _CALIBRATION_FRAMES, 0))
+        # Калибровка идёт по середине ролика, а не по его началу. В первые
+        # секунды у роликов заставка с обложкой: блоки не движутся, и
+        # скорость падения выходила нулевой. Без неё длительность ноты
+        # не вычислить, и трекер блоков терял три четверти событий.
+        calibration_start = min(
+            int(media.frame_count * _CALIBRATION_AT),
+            max(media.frame_count - _CALIBRATION_FRAMES, 0),
+        )
         profile = calibrate(
             _consecutive_frames(capture, calibration_start, _CALIBRATION_FRAMES),
             layout,
