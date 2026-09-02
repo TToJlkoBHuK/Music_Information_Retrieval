@@ -1,4 +1,7 @@
 @echo off
+rem Кодировка вывода: без этого кириллица в CMD показывается кракозябрами,
+rem потому что файл в UTF-8, а консоль по умолчанию в cp866.
+chcp 65001 >nul
 rem Запуск проекта тем интерпретатором, где есть зависимости.
 rem
 rem На машине обычно несколько установок Python, и `python` в PATH
@@ -60,6 +63,16 @@ rem под него, и готовый .pyd не загружается: у ка
 rem свой двоичный интерфейс.
 for /f "delims=" %%i in ('%PY% -c "import sys; print(sys.executable)"') do set "PYEXE=%%i"
 echo Интерпретатор: !PYEXE!
+
+rem Кэш CMake привязан к абсолютным путям. Каталог сборки, созданный
+rem в другом месте — например, перенесённый вместе с проектом, — приводит
+rem к отказу конфигурации, поэтому чужой кэш просто удаляется.
+if exist core\build\CMakeCache.txt (
+    findstr /c:"%CD:\=/%" core\build\CMakeCache.txt >nul 2>&1 || (
+        echo Кэш сборки от другого каталога, пересоздаю.
+        rmdir /s /q core\build
+    )
+)
 echo.
 "!PYEXE!" -m pip install --quiet pybind11 cmake || exit /b 1
 "!PYEXE!" -m cmake -B core\build -S core -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="!PYEXE!" || exit /b 1
