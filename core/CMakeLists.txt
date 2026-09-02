@@ -15,6 +15,12 @@ option(MIR_BUILD_TESTS "Собирать C++-тесты" ON)
 
 # pybind11 ищется через Python: так берётся та же версия, что стоит
 # в окружении проекта, и заголовки заведомо совпадают с интерпретатором.
+#
+# Какой именно интерпретатор — важно: модуль расширения совместим только
+# с той версией Python, под которую собран. CMake без подсказки берёт
+# первый из PATH, а он часто не тот, в котором стоят зависимости проекта.
+# Поэтому проще собирать через `run build`: там нужный путь подставляется
+# сам. Вручную — ключом -DPython3_EXECUTABLE=путь\к\python.exe
 find_package(Python3 COMPONENTS Interpreter Development.Module REQUIRED)
 
 execute_process(
@@ -24,7 +30,11 @@ execute_process(
     RESULT_VARIABLE PYBIND11_LOOKUP
 )
 if(NOT PYBIND11_LOOKUP EQUAL 0)
-    message(FATAL_ERROR "pybind11 не найден. Установите: pip install pybind11")
+    message(FATAL_ERROR
+        "pybind11 не найден в ${Python3_EXECUTABLE}.\n"
+        "Установите его в этот же интерпретатор:\n"
+        "  \"${Python3_EXECUTABLE}\" -m pip install pybind11\n"
+        "Либо соберите ядро командой run build — она всё подставит сама.")
 endif()
 find_package(pybind11 REQUIRED PATHS "${PYBIND11_CMAKE_DIR}" NO_DEFAULT_PATH)
 

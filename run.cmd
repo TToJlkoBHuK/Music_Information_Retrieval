@@ -9,6 +9,7 @@ rem
 rem   run demo                     синтетический ролик с известным ответом
 rem   run analyze video.mp4        разбор своего ролика
 rem   run fetch "https://..."      скачать ролик
+rem   run build                    собрать нативное ядро C++
 rem   run test                     прогнать тесты
 rem   run doctor                   диагностика сети и FFmpeg
 rem   run python -c "..."          произвольная команда нужным Python
@@ -49,7 +50,23 @@ if /i "%CMD%"=="doctor"   ( %PY% scripts\ingest_cli.py doctor %1 %2 %3 %4 %5 %6 
 if /i "%CMD%"=="bench"    ( %PY% scripts\bench_core.py %1 %2 %3 %4 %5 %6 %7 %8 %9 & exit /b !errorlevel! )
 if /i "%CMD%"=="test"     ( %PY% -m pytest tests %1 %2 %3 %4 %5 %6 %7 %8 %9 & exit /b !errorlevel! )
 if /i "%CMD%"=="python"   ( %PY% %1 %2 %3 %4 %5 %6 %7 %8 %9 & exit /b !errorlevel! )
+if /i "%CMD%"=="build"    goto :build
 if /i "%CMD%"=="which"    ( echo %PY% & %PY% -c "import sys; print(sys.executable, sys.version)" & exit /b 0 )
+
+:build
+rem Ядро собирается для того же интерпретатора, которым запускается
+rem проект. Иначе CMake берёт первый Python из PATH, собирает модуль
+rem под него, и готовый .pyd не загружается: у каждой версии Python
+rem свой двоичный интерфейс.
+for /f "delims=" %%i in ('%PY% -c "import sys; print(sys.executable)"') do set "PYEXE=%%i"
+echo Интерпретатор: !PYEXE!
+echo.
+"!PYEXE!" -m pip install --quiet pybind11 cmake || exit /b 1
+"!PYEXE!" -m cmake -B core\build -S core -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="!PYEXE!" || exit /b 1
+"!PYEXE!" -m cmake --build core\build --config Release || exit /b 1
+echo.
+"!PYEXE!" -c "from mir.vision import accel; print('ядро:', accel.backend_name())"
+exit /b 0
 
 :usage
 echo Использование: run ^<команда^> [аргументы]
@@ -61,6 +78,7 @@ echo   fetch     скачать ролик по ссылке
 echo   info      сведения о ролике без скачивания
 echo   doctor    диагностика сети и FFmpeg
 echo   bench     сравнение C++ ядра с numpy
+echo   build     собрать нативное ядро C++
 echo   test      прогнать тесты
 echo   which     показать выбранный интерпретатор
 exit /b 1

@@ -220,10 +220,10 @@ python scripts/vision_cli.py analyze video.mp4 --csv notes.csv
 Проект работает и без него, только медленнее: `mir.vision.accel` переключается на numpy. Сборка ускоряет покадровый разбор в 27 раз.
 
 ```bash
-cmake -B core/build -S core -DCMAKE_BUILD_TYPE=Release
-cmake --build core/build --config Release
-python -c "from mir.vision import accel; print(accel.backend_name())"
+run build
 ```
+
+Команда сама найдёт нужный интерпретатор, поставит pybind11 и соберёт модуль. Вручную придётся указывать интерпретатор явно ключом `-DPython3_EXECUTABLE`, иначе CMake возьмёт первый Python из PATH и соберёт модуль, который не загрузится.
 
 Ожидаемый ответ — `mir_core (C++)`. Если `numpy`, ядро не собралось или не найдено.
 

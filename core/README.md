@@ -81,7 +81,15 @@ void medianFrame(const std::uint8_t* const* frames, std::size_t count, int width
 ## Сборка
 
 ```
-cmake -B core/build -S core -DCMAKE_BUILD_TYPE=Release
+run build
+```
+
+На Windows это единственный надёжный способ: `run.cmd` подставляет тот интерпретатор, которым запускается проект, ставит в него pybind11 и запускает CMake. Без подсказки CMake берёт первый Python из PATH — обычно не тот, где стоят зависимости, — и собранный модуль потом не загружается: у каждой версии Python свой двоичный интерфейс.
+
+Вручную то же самое:
+
+```
+cmake -B core/build -S core -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="путь\к\python.exe"
 cmake --build core/build --config Release
 ```
 
