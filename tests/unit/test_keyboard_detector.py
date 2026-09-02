@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from mir.common.errors import KeyboardNotFoundError
+from mir.common.types import Frame
 from mir.vision.keyboard_detector import (
     KeyboardDetector,
     build_median_frame,
@@ -106,7 +107,7 @@ def test_detector_rejects_frame_without_keyboard():
         KeyboardDetector().detect(noise)
 
 
-def _keyboard_strip(width: int, height: int) -> np.ndarray:
+def _keyboard_strip(width: int, height: int) -> Frame:
     """Полоса с регулярным чёрно-белым узором — как у клавиатуры."""
     strip = np.full((height, width, 3), 240, dtype=np.uint8)
     for x in range(0, width, 12):
