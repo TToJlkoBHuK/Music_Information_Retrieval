@@ -279,6 +279,118 @@ def _dump_median(video: Path, path: Path) -> bool:
     return True
 
 
+def command_diagnose(args: argparse.Namespace) -> int:
+    """Показать, на каком шаге детекции всё разваливается.
+
+    Печатает промежуточные величины каждого шага и сохраняет картинки.
+    Без этого причина отказа на чужом ролике устанавливается только
+    гаданием: сообщение об ошибке называет симптом, а не место.
+    """
+    from mir.vision.keyboard_detector import KeyboardDetector, match_black_pattern
+
+    video = Path(args.video)
+    if not video.exists():
+        print(f"файл не найден: {video}")
+        return 1
+
+    capture = cv2.VideoCapture(str(video))
+    total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = capture.get(cv2.CAP_PROP_FPS) or 30.0
+    width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    print(f"ролик           : {width}x{height}, {fps:.2f} fps, кадров {total}")
+
+    frames = []
+    for index in np.linspace(total * 0.15, total * 0.92, args.frames, dtype=int):
+        capture.set(cv2.CAP_PROP_POS_FRAMES, int(index))
+        ok, frame = capture.read()
+        if ok:
+            frames.append(frame)
+    capture.release()
+    if not frames:
+        print("не удалось прочитать кадры")
+        return 1
+
+    median = accel.median_frame(frames)
+    gray = cv2.cvtColor(median, cv2.COLOR_BGR2GRAY)
+    detector = KeyboardDetector()
+
+    edges = np.abs(cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3))
+    per_row = edges.mean(axis=1)
+    threshold = per_row.mean() + per_row.std() * 0.5
+    runs = detector._runs(per_row > threshold)
+    min_height = max(int(height * 0.05), 4)
+
+    print(f"\nшаг 1: полосы с вертикальным узором (порог {threshold:.1f})")
+    ranked = sorted(runs, key=lambda r: r[1] - r[0], reverse=True)[:6]
+    for top, bottom in ranked:
+        mark = "годится" if bottom - top >= min_height else "коротка"
+        where = "низ" if (top + bottom) / 2 > height * 0.5 else "верх"
+        print(f"  y={top:4d}..{bottom:4d}  высота {bottom - top:4d}  {where:4s}  {mark}")
+    if not ranked:
+        print("  ни одной полосы не найдено")
+        return 1
+
+    try:
+        band = detector._find_band(gray)
+    except Exception as exc:
+        print(f"  выбор полосы не удался: {exc}")
+        return 1
+    print(f"  выбрана        : y={band.top}..{band.bottom}")
+
+    print("\nшаг 2: границы белых клавиш")
+    try:
+        boundaries = detector._find_white_boundaries(gray, band)
+    except Exception as exc:
+        print(f"  не удалось: {exc}")
+        boundaries = []
+    if boundaries:
+        widths = np.diff(boundaries)
+        print(f"  найдено границ : {len(boundaries)} (белых клавиш {len(boundaries) - 1})")
+        print(
+            f"  ширина клавиши : медиана {np.median(widths):.1f} px, "
+            f"разброс {widths.min()}..{widths.max()}"
+        )
+        print(f"  область        : x={boundaries[0]}..{boundaries[-1]} из {width}")
+
+    if boundaries:
+        print("\nшаг 3: узор чёрных клавиш")
+        flags = detector._detect_black_keys(gray, band, boundaries)
+        shift, score = match_black_pattern(flags)
+        print("  узор           : " + "".join("X" if f else "." for f in flags))
+        print("  эталон октавы  : XX.XXX.")
+        print(f"  совпадение     : {score:.3f} (нужно ≥ 0.7), «до» на позиции {shift}")
+
+    out_dir = Path(args.out_dir)
+    _save(median, out_dir / "median.png", "медианный кадр")
+    _save(
+        _draw_row_profile(median, per_row, threshold, band),
+        out_dir / "profile.png",
+        "профиль градиентов",
+    )
+    return 0
+
+
+def _draw_row_profile(median: Frame, per_row: Frame, threshold: float, band: object) -> Frame:
+    """Наложить на кадр график вертикальных границ по строкам."""
+    canvas = median.copy()
+    height, width = canvas.shape[:2]
+    scale = (width * 0.25) / max(per_row.max(), 1e-6)
+
+    for y in range(height - 1):
+        cv2.line(
+            canvas,
+            (0, y),
+            (int(per_row[y] * scale), y),
+            (0, 200, 255) if per_row[y] > threshold else (80, 80, 80),
+            1,
+        )
+    cv2.line(canvas, (int(threshold * scale), 0), (int(threshold * scale), height), (0, 0, 255), 1)
+    top, bottom = getattr(band, "top", 0), getattr(band, "bottom", 0)
+    cv2.rectangle(canvas, (0, top), (width - 1, bottom), (0, 255, 0), 2)
+    return canvas
+
+
 def command_analyze(args: argparse.Namespace) -> int:
     """Разобрать готовый ролик."""
     video = Path(args.video)
@@ -425,6 +537,12 @@ def build_parser() -> argparse.ArgumentParser:
     demo.add_argument("--out-dir", default="build/vision_demo")
     demo.add_argument("--report", help="дополнительная картинка с результатом")
     demo.set_defaults(func=command_demo)
+
+    diagnose = sub.add_parser("diagnose", help="почему детекция не сработала")
+    diagnose.add_argument("video")
+    diagnose.add_argument("--frames", type=int, default=60, help="кадров для медианы")
+    diagnose.add_argument("--out-dir", default="build/diagnose")
+    diagnose.set_defaults(func=command_diagnose)
 
     return parser
 
