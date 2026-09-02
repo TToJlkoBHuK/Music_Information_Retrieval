@@ -22,6 +22,7 @@ from dataclasses import dataclass
 
 import cv2
 import numpy as np
+import numpy.typing as npt
 
 from mir.common.errors import KeyboardNotFoundError
 from mir.common.logging import get_logger
@@ -167,11 +168,24 @@ class KeyboardDetector:
 
         return self._build_layout(band, boundaries, shift, pattern_score)
 
+    @staticmethod
+    def _runs(marked: npt.NDArray[np.bool_]) -> list[tuple[int, int]]:
+        """Непрерывные участки подряд идущих True как пары (начало, конец)."""
+        padded = np.concatenate(([False], marked, [False]))
+        edges = np.flatnonzero(padded[1:] != padded[:-1])
+        return list(zip(edges[::2], edges[1::2], strict=True))
+
     def _find_band(self, gray: Frame) -> _Band:
         """Найти горизонтальную полосу клавиатуры.
 
         Признак — обилие вертикальных границ: у клавиатуры их десятки
         на строку, у зоны падающих блоков единицы.
+
+        Полоса ищется как самый длинный непрерывный участок таких строк,
+        а не отсчитывается от нижнего края кадра. Упереться в низ она
+        не обязана: у реальных роликов там оказываются то тень от клавиш,
+        то полоса педали, то чёрные поля от несовпадения пропорций.
+        Прежний вариант на таком кадре не находил ничего вовсе.
         """
         height = gray.shape[0]
         edges = np.abs(cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3))
@@ -180,19 +194,23 @@ class KeyboardDetector:
         threshold = per_row.mean() + per_row.std() * 0.5
         rows_with_pattern = per_row > threshold
 
-        bottom = height - 1
-        top = bottom
-        while top > 0 and rows_with_pattern[top]:
-            top -= 1
+        min_height = max(int(height * 0.05), 4)
+        runs = [(a, b) for a, b in self._runs(rows_with_pattern) if b - a >= min_height]
 
-        if bottom - top < height * 0.05:
+        if not runs:
             raise KeyboardNotFoundError(
-                f"полоса клавиатуры слишком узкая: {bottom - top} пикселей",
+                f"нет ни одной полосы с регулярным узором выше {min_height} пикселей",
                 "В этом видео не найдена фортепианная клавиатура",
             )
 
-        confidence = float(rows_with_pattern[top:bottom].mean())
-        return _Band(top=top + 1, bottom=bottom, confidence=confidence)
+        # Клавиатура у визуализаторов всегда в нижней части кадра, поэтому
+        # верхние участки рассматриваются только когда других нет: сверху
+        # такой же плотный узор дают титры и ряды падающих блоков.
+        lower = [(a, b) for a, b in runs if (a + b) / 2 > height * 0.5]
+        top, bottom = max(lower or runs, key=lambda run: run[1] - run[0])
+
+        confidence = float(np.clip(per_row[top:bottom].mean() / (threshold + 1e-6) - 1.0, 0.0, 1.0))
+        return _Band(top=int(top), bottom=int(bottom), confidence=confidence)
 
     def _find_white_boundaries(self, gray: Frame, band: _Band) -> list[int]:
         """Найти вертикальные границы белых клавиш.

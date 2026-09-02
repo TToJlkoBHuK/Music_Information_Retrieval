@@ -44,6 +44,7 @@ except ImportError as exc:  # pragma: no cover - зависит от окруж�
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mir.common.enums import Hand
+from mir.common.errors import KeyboardNotFoundError
 from mir.common.logging import setup_logging
 from mir.common.types import Frame, KeyboardLayout, NoteEvent
 from mir.eval import evaluate
@@ -250,6 +251,34 @@ def _first_frame(video: Path) -> Frame | None:
 VIDEO_SUFFIXES = frozenset({".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v", ".flv"})
 
 
+def _dump_median(video: Path, path: Path) -> bool:
+    """Сохранить медианный кадр — то, на чём работает детектор.
+
+    Первое, что нужно увидеть при неудачной детекции: заставка,
+    неверные пропорции и посторонние наложения видны сразу.
+    """
+    import numpy as np_local
+
+    capture = cv2.VideoCapture(str(video))
+    total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    if total <= 0:
+        capture.release()
+        return False
+
+    frames = []
+    for index in np_local.linspace(total * 0.15, total * 0.92, 40, dtype=int):
+        capture.set(cv2.CAP_PROP_POS_FRAMES, int(index))
+        ok, frame = capture.read()
+        if ok:
+            frames.append(frame)
+    capture.release()
+
+    if not frames:
+        return False
+    _save(accel.median_frame(frames), path, "медианный кадр")
+    return True
+
+
 def command_analyze(args: argparse.Namespace) -> int:
     """Разобрать готовый ролик."""
     video = Path(args.video)
@@ -265,7 +294,19 @@ def command_analyze(args: argparse.Namespace) -> int:
         print(f"    dir {Path('~/.mir_cache').expanduser()}")
         return 1
 
-    result = analyze_file(video, max_seconds=args.seconds)
+    try:
+        result = analyze_file(video, max_seconds=args.seconds, start_seconds=args.start)
+    except KeyboardNotFoundError as exc:
+        print(f"Клавиатура не найдена: {exc.user_message}")
+        print(f"  причина: {exc}")
+        dump = Path(args.overlay or "build/median.png").with_name("median.png")
+        if _dump_median(video, dump):
+            print()
+            print(f"Медианный кадр сохранён: {dump}")
+            print("По нему видно, что именно разбирал детектор. Если там заставка")
+            print("или логотип вместо клавиатуры — начните разбор позже: --start 60")
+        return 1
+
     print_result(result)
 
     if args.csv:
@@ -364,7 +405,13 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument(
         "--seconds",
         type=float,
-        help="разобрать только первые N секунд — быстрая проверка разметки",
+        help="разобрать только N секунд — быстрая проверка разметки",
+    )
+    analyze.add_argument(
+        "--start",
+        type=float,
+        default=0.0,
+        help="с какой секунды начинать: ролики часто открываются заставкой",
     )
     analyze.set_defaults(func=command_analyze)
 

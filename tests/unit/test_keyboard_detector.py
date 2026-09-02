@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import cv2
 import numpy as np
 import pytest
 
@@ -103,3 +104,37 @@ def test_detector_rejects_frame_without_keyboard():
 
     with pytest.raises(KeyboardNotFoundError):
         KeyboardDetector().detect(noise)
+
+
+def _keyboard_strip(width: int, height: int) -> np.ndarray:
+    """Полоса с регулярным чёрно-белым узором — как у клавиатуры."""
+    strip = np.full((height, width, 3), 240, dtype=np.uint8)
+    for x in range(0, width, 12):
+        strip[:, x : x + 1] = 40
+    return strip
+
+
+def test_band_found_when_keyboard_is_not_at_the_bottom():
+    """Клавиатура не обязана упираться в низ кадра.
+
+    У реальных роликов там оказываются чёрные поля, тень от клавиш
+    или полоса педали. Прежний вариант в таком кадре не находил ничего.
+    """
+    frame = np.full((400, 480, 3), 25, dtype=np.uint8)
+    frame[240:340] = _keyboard_strip(480, 100)
+
+    band = KeyboardDetector()._find_band(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
+
+    assert 235 <= band.top <= 245
+    assert 335 <= band.bottom <= 345
+
+
+def test_lower_band_wins_over_upper_one():
+    """Сверху похожий узор дают титры и ряды блоков; клавиатура — снизу."""
+    frame = np.full((400, 480, 3), 25, dtype=np.uint8)
+    frame[20:160] = _keyboard_strip(480, 140)
+    frame[250:350] = _keyboard_strip(480, 100)
+
+    band = KeyboardDetector()._find_band(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
+
+    assert band.top > 200

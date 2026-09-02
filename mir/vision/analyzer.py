@@ -63,8 +63,18 @@ class VisionResult:
     warnings: list[str] = field(default_factory=list)
 
 
+_SAMPLE_FROM = 0.15
+_SAMPLE_TO = 0.92
+"""Доля ролика, из которой берутся кадры для детекции клавиатуры.
+
+Края отброшены намеренно: ролики почти всегда начинаются заставкой
+с обложкой и названием, а заканчиваются титрами. Клавиатуры там нет,
+и попавшие в выборку кадры смещают медиану.
+"""
+
+
 def _sample_frames(capture: cv2.VideoCapture, count: int) -> list[Frame]:
-    """Взять кадры равномерно по всему ролику.
+    """Взять кадры равномерно по основной части ролика.
 
     Именно равномерно: подряд идущие кадры почти одинаковы, и медиана
     по ним не убрала бы подсветку.
@@ -73,8 +83,11 @@ def _sample_frames(capture: cv2.VideoCapture, count: int) -> list[Frame]:
     if total <= 0:
         return []
 
+    first = int(total * _SAMPLE_FROM) if total > 100 else 0
+    last = int(total * _SAMPLE_TO) if total > 100 else total - 1
+
     frames: list[Frame] = []
-    for index in np.linspace(0, total - 1, min(count, total), dtype=int):
+    for index in np.linspace(first, last, min(count, last - first + 1), dtype=int):
         capture.set(cv2.CAP_PROP_POS_FRAMES, int(index))
         ok, frame = capture.read()
         if ok:
@@ -138,6 +151,7 @@ def analyze_video(
     config: MirConfig | None = None,
     progress: ProgressCallback | None = None,
     max_seconds: float | None = None,
+    start_seconds: float = 0.0,
 ) -> VisionResult:
     """Разобрать видеоряд и вернуть найденные ноты.
 
@@ -145,9 +159,11 @@ def analyze_video(
         media: Подготовленный материал с этапа `ingest`.
         config: Конфигурация. По умолчанию загружается стандартная.
         progress: Колбэк прогресса.
-        max_seconds: Разобрать только начало ролика. Клавиатура и профиль
+        max_seconds: Разобрать только отрезок ролика. Клавиатура и профиль
             всё равно определяются по всей длине: медиана по кадрам из
             одного места хуже убирает подсветку.
+        start_seconds: С какой секунды начинать разбор. Нужен, когда ролик
+            открывается заставкой.
 
     Returns:
         События с указанием руки, разметка клавиатуры и профиль ролика.
@@ -189,11 +205,12 @@ def analyze_video(
         key_tracker = KeyTracker(layout, reference, config.vision.tracker)
         block_tracker = BlockTracker(layout, profile, media.fps, config.vision.tracker)
 
-        capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        first = int(start_seconds * media.fps)
+        capture.set(cv2.CAP_PROP_POS_FRAMES, first)
         key_notes: list[NoteEvent] = []
-        index = 0
-        limit = int(max_seconds * media.fps) if max_seconds else None
-        total = max(min(media.frame_count, limit or media.frame_count), 1)
+        index = first
+        limit = first + int(max_seconds * media.fps) if max_seconds else None
+        total = max(min(media.frame_count, limit or media.frame_count) - first, 1)
 
         while True:
             if limit is not None and index >= limit:
@@ -206,7 +223,7 @@ def analyze_video(
             block_tracker.process_frame(frame, timestamp)
             index += 1
             if progress and index % 30 == 0:
-                progress(Stage.VISION, min(index / total, 1.0))
+                progress(Stage.VISION, min((index - first) / total, 1.0))
 
         key_notes.extend(key_tracker.flush(index / media.fps))
         block_notes = block_tracker.flush()
@@ -245,6 +262,7 @@ def analyze_file(
     config: MirConfig | None = None,
     progress: ProgressCallback | None = None,
     max_seconds: float | None = None,
+    start_seconds: float = 0.0,
 ) -> VisionResult:
     """Разобрать видеофайл без прохода через `ingest`.
 
@@ -265,4 +283,4 @@ def analyze_file(
         width=width,
         height=height,
     )
-    return analyze_video(bundle, config, progress, max_seconds)
+    return analyze_video(bundle, config, progress, max_seconds, start_seconds)
