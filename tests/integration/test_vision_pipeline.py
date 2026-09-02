@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -169,3 +170,26 @@ def test_result_reports_backend_and_counts(clean_video: Path):
     assert result.elapsed_sec > 0
     assert result.notes_from_keys > 0
     assert result.notes_from_blocks > 0
+
+
+def test_intro_is_skipped_automatically(tmp_path: Path, melody: list[NoteEvent]):
+    """Заставка в начале ролика не должна требовать ручного ключа.
+
+    У каждого автора она своей длины, и просить пользователя указывать её
+    вручную — ровно то неудобство, которое проект и должен устранить.
+    """
+    intro = 2.0
+    video = render_visualizer_video(
+        melody, tmp_path / "intro.mp4", SynthConfig(intro_seconds=intro, outro_seconds=1.5)
+    )
+    # Заставка сдвигает всю музыку: эталон сдвигается вместе с ней.
+    expected = [
+        replace(note, onset=note.onset + intro, offset=note.offset + intro) for note in melody
+    ]
+
+    result = analyze_file(video)
+    score = evaluate(expected, result.notes)
+    print("\n" + score.format_report("ролик с заставкой и титрами"))
+
+    assert score.recall == pytest.approx(1.0)
+    assert score.precision > 0.9

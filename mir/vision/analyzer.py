@@ -152,6 +152,129 @@ def _merge_hands(key_notes: list[NoteEvent], block_notes: list[NoteEvent]) -> li
     return merged
 
 
+_SPAN_PROBE_STEP = 0.5
+"""Шаг сканирования при поиске границ фрагмента с клавиатурой, секунды."""
+
+_SPAN_SEARCH_SHARE = 0.3
+"""Какую долю ролика с каждого края обыскивать на заставку и титры.
+
+Заставка длиннее трети ролика — это уже не заставка.
+"""
+
+_SPAN_SIMILARITY = 0.5
+"""Насколько профиль стыков должен совпасть с эталонным.
+
+У кадра с клавиатурой совпадение около единицы даже при яркой подсветке:
+она меняет яркость клавиш, но не положение стыков. У заставки с обложкой
+регулярного узора нет вовсе, и совпадение падает к нулю.
+"""
+
+
+def _keyboard_signature(frame: Frame, layout: KeyboardLayout) -> Frame:
+    """Профиль стыков клавиш — признак того, что клавиатура в кадре.
+
+    Берётся нижняя треть области клавиатуры: подсветка меняет там яркость,
+    но стыки остаются на местах, поэтому признак устойчив к игре.
+    """
+    x, y, width, height = layout.bbox
+    strip = frame[y + 2 * height // 3 : y + height, x : x + width]
+    if strip.size == 0:
+        return np.zeros(1, dtype=np.float32)
+
+    gray = cv2.cvtColor(strip, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    profile = np.abs(cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)).mean(axis=0)
+    centered: Frame = profile - profile.mean()
+    return centered
+
+
+def _similarity(first: Frame, second: Frame) -> float:
+    """Нормированная корреляция двух профилей, 0..1."""
+    norm = float(np.linalg.norm(first) * np.linalg.norm(second))
+    if norm <= 0:
+        return 0.0
+    return max(0.0, float(np.dot(first, second) / norm))
+
+
+def find_keyboard_span(
+    capture: cv2.VideoCapture,
+    layout: KeyboardLayout,
+    reference: Frame,
+    fps: float,
+    total_frames: int,
+) -> tuple[float, float]:
+    """Найти отрезок ролика, где клавиатура действительно в кадре.
+
+    Ролики открываются заставкой с обложкой и названием, а заканчиваются
+    титрами; их длительность у каждого автора своя, и просить пользователя
+    указывать её вручную — ровно то неудобство, которое проект и должен
+    устранить.
+
+    Каждый пробный кадр сравнивается по профилю стыков с эталонным
+    (медианным) кадром. Признак выбран так, чтобы не зависеть от игры:
+    подсветка меняет яркость клавиш, но не положение стыков.
+
+    Returns:
+        Начало и конец отрезка в секундах.
+    """
+    expected = _keyboard_signature(reference, layout)
+    step = max(int(fps * _SPAN_PROBE_STEP), 1)
+    limit = int(total_frames * _SPAN_SEARCH_SHARE)
+
+    def has_keyboard(index: int) -> bool:
+        capture.set(cv2.CAP_PROP_POS_FRAMES, index)
+        ok, frame = capture.read()
+        if not ok:
+            return False
+        return _similarity(_keyboard_signature(frame, layout), expected) >= _SPAN_SIMILARITY
+
+    def refine(absent: int, present: int) -> int:
+        """Уточнить границу перехода двоичным поиском.
+
+        Грубого шага мало: между последней проверкой и настоящей границей
+        остаётся до полусекунды заставки, а резкая смена кадра выглядит для
+        трекера как одновременное нажатие всех клавиш сразу.
+        """
+        while abs(present - absent) > 1:
+            middle = (absent + present) // 2
+            if has_keyboard(middle):
+                present = middle
+            else:
+                absent = middle
+        return present
+
+    start = 0
+    previous = 0
+    for index in range(0, limit, step):
+        if has_keyboard(index):
+            start = index if index == 0 else refine(previous, index)
+            break
+        previous = index
+
+    end = total_frames
+    previous = total_frames - 1
+    for index in range(total_frames - 1, total_frames - limit, -step):
+        if has_keyboard(index):
+            end = index if index == total_frames - 1 else refine(previous, index)
+            break
+        previous = index
+
+    # Отступ внутрь отрезка: переход между заставкой и клавиатурой часто
+    # плавный, и пограничные кадры дают всплеск ложных нажатий.
+    if start > 0:
+        start = min(start + step, total_frames - 1)
+    if end < total_frames:
+        end = max(end - step, start + 1)
+
+    if start > 0 or end < total_frames:
+        _log.info(
+            "клавиатура в кадре с %.1f с по %.1f с из %.1f с",
+            start / fps,
+            end / fps,
+            total_frames / fps,
+        )
+    return start / fps, end / fps
+
+
 def analyze_video(
     media: MediaBundle,
     config: MirConfig | None = None,
@@ -217,6 +340,14 @@ def analyze_video(
 
         key_tracker = KeyTracker(layout, reference, config.vision.tracker)
         block_tracker = BlockTracker(layout, profile, media.fps, config.vision.tracker)
+
+        span_start, span_end = find_keyboard_span(
+            capture, layout, reference, media.fps, media.frame_count
+        )
+        if start_seconds <= 0:
+            start_seconds = span_start
+        if max_seconds is None:
+            max_seconds = max(span_end - start_seconds, 0.0) or None
 
         first = int(start_seconds * media.fps)
         capture.set(cv2.CAP_PROP_POS_FRAMES, first)

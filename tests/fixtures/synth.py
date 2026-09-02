@@ -91,6 +91,8 @@ class SynthConfig:
     glow: bool = False
     noise_sigma: float = 0.0
     watermark: str | None = None
+    intro_seconds: float = 0.0
+    outro_seconds: float = 0.0
 
     @property
     def keyboard_top(self) -> int:
@@ -180,6 +182,30 @@ def _draw_blocks(frame: Frame, config: SynthConfig, notes: list[NoteEvent], t: f
         cv2.rectangle(frame, (int(left), y0), (int(right) - 1, y1), colour, -1)
 
 
+def _draw_title_card(frame: Frame, config: SynthConfig) -> None:
+    """Нарисовать заставку: обложка и название вместо клавиатуры.
+
+    Так открывается почти каждый ролик на YouTube, и клавиатуры в этих
+    кадрах нет вовсе.
+    """
+    cv2.rectangle(
+        frame,
+        (config.width // 4, config.height // 4),
+        (config.width * 3 // 4, config.height * 3 // 4),
+        (60, 50, 45),
+        -1,
+    )
+    cv2.putText(
+        frame,
+        "PIANO",
+        (config.width // 3, config.height // 2),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        2.0,
+        (220, 220, 220),
+        3,
+    )
+
+
 def render_visualizer_video(
     notes: list[NoteEvent],
     out_path: Path,
@@ -208,6 +234,7 @@ def render_visualizer_video(
     if duration is None:
         last = max((n.offset for n in notes), default=1.0)
         duration = last + config.keyboard_top / config.fall_speed + 0.5
+    duration += config.intro_seconds + config.outro_seconds
 
     writer = cv2.VideoWriter(
         str(out_path),
@@ -222,11 +249,19 @@ def render_visualizer_video(
     total = int(duration * config.fps)
 
     try:
+        intro_frames = int(config.intro_seconds * config.fps)
+        outro_frames = int(config.outro_seconds * config.fps)
+
         for index in range(total):
-            t = index / config.fps
+            t = (index - intro_frames) / config.fps
             frame = np.full(
                 (config.height, config.width, 3), config.colors.background, dtype=np.uint8
             )
+
+            if index < intro_frames or index >= total - outro_frames:
+                _draw_title_card(frame, config)
+                writer.write(frame)
+                continue
 
             _draw_blocks(frame, config, notes, t)
 
