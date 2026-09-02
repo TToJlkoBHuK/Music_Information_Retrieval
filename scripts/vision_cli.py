@@ -25,8 +25,21 @@ import logging
 import sys
 from pathlib import Path
 
-import cv2
-import numpy as np
+try:
+    import cv2
+    import numpy as np
+except ImportError as exc:  # pragma: no cover - зависит от окружения
+    # Частый случай на Windows: несколько установок Python, и `python`
+    # в PATH указывает не на ту, куда pip ставил пакеты. Traceback здесь
+    # ничего не объясняет, поэтому сообщение прямое.
+    raise SystemExit(
+        f"Не найдена библиотека {exc.name}.\n\n"
+        f"Текущий интерпретатор: {sys.executable}\n\n"
+        "Установите зависимости именно в него:\n"
+        '    python -m pip install -e ".[dev]"\n\n'
+        "Либо запускайте через run.cmd — он сам выберет подходящий Python:\n"
+        "    run demo"
+    ) from exc
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -234,11 +247,22 @@ def _first_frame(video: Path) -> Frame | None:
     return frame if ok else None
 
 
+VIDEO_SUFFIXES = frozenset({".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v", ".flv"})
+
+
 def command_analyze(args: argparse.Namespace) -> int:
     """Разобрать готовый ролик."""
     video = Path(args.video)
     if not video.exists():
         print(f"файл не найден: {video}")
+        return 1
+
+    if video.suffix.lower() not in VIDEO_SUFFIXES:
+        print(f"{video.name} — это не видеофайл, а {video.suffix or 'файл без расширения'}.")
+        print()
+        print("Этап загрузки кладёт рядом аудиодорожку, а само видео — в кэш.")
+        print("Путь к видео печатает команда fetch строкой «Видео:», или посмотрите кэш:")
+        print(f"    dir {Path('~/.mir_cache').expanduser()}")
         return 1
 
     result = analyze_file(video, max_seconds=args.seconds)
