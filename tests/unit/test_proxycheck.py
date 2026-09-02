@@ -64,17 +64,17 @@ class TestFfmpegLookup:
         (bin_dir / name).write_text("", encoding="utf-8")
 
         monkeypatch.setenv(FFMPEG_DIR_ENV, str(bin_dir))
-        monkeypatch.setattr(demuxer.shutil, "which", lambda _: None)
+        monkeypatch.setattr("mir.ingest.demuxer.shutil.which", lambda _: None)
 
         assert demuxer._lookup("ffmpeg") == bin_dir / name
 
     def test_path_has_priority_over_guesses(self, monkeypatch):
-        monkeypatch.setattr(demuxer.shutil, "which", lambda _: "/usr/bin/ffmpeg")
+        monkeypatch.setattr("mir.ingest.demuxer.shutil.which", lambda _: "/usr/bin/ffmpeg")
 
         assert demuxer._lookup("ffmpeg") == Path("/usr/bin/ffmpeg")
 
     def test_missing_tool_names_itself(self, monkeypatch):
-        monkeypatch.setattr(demuxer.shutil, "which", lambda _: None)
+        monkeypatch.setattr("mir.ingest.demuxer.shutil.which", lambda _: None)
         monkeypatch.setattr(demuxer, "_candidate_dirs", list)
 
         with pytest.raises(DemuxError) as excinfo:
