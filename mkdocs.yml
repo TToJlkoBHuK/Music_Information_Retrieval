@@ -80,6 +80,7 @@ nav:
       - Требования: requirements.md
       - Запуск и проверка: quickstart.md
       - Как смотреть тесты: testing.md
+      - Известные дефекты: known-issues.md
   - Аналитика:
       - Обзор литературы: literature-review.md
       - Существующие решения: competitors.md
