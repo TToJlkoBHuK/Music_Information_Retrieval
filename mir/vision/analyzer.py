@@ -137,6 +137,7 @@ def analyze_video(
     media: MediaBundle,
     config: MirConfig | None = None,
     progress: ProgressCallback | None = None,
+    max_seconds: float | None = None,
 ) -> VisionResult:
     """Разобрать видеоряд и вернуть найденные ноты.
 
@@ -144,6 +145,9 @@ def analyze_video(
         media: Подготовленный материал с этапа `ingest`.
         config: Конфигурация. По умолчанию загружается стандартная.
         progress: Колбэк прогресса.
+        max_seconds: Разобрать только начало ролика. Клавиатура и профиль
+            всё равно определяются по всей длине: медиана по кадрам из
+            одного места хуже убирает подсветку.
 
     Returns:
         События с указанием руки, разметка клавиатуры и профиль ролика.
@@ -188,9 +192,12 @@ def analyze_video(
         capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
         key_notes: list[NoteEvent] = []
         index = 0
-        total = max(media.frame_count, 1)
+        limit = int(max_seconds * media.fps) if max_seconds else None
+        total = max(min(media.frame_count, limit or media.frame_count), 1)
 
         while True:
+            if limit is not None and index >= limit:
+                break
             ok, frame = capture.read()
             if not ok:
                 break
@@ -237,6 +244,7 @@ def analyze_file(
     video_path: Path,
     config: MirConfig | None = None,
     progress: ProgressCallback | None = None,
+    max_seconds: float | None = None,
 ) -> VisionResult:
     """Разобрать видеофайл без прохода через `ingest`.
 
@@ -257,4 +265,4 @@ def analyze_file(
         width=width,
         height=height,
     )
-    return analyze_video(bundle, config, progress)
+    return analyze_video(bundle, config, progress, max_seconds)

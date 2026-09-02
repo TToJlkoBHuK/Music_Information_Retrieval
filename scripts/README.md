@@ -53,7 +53,14 @@ python scripts/vision_cli.py analyze video.mp4
 python scripts/vision_cli.py analyze video.mp4 --overlay layout.png --roll roll.png
 python scripts/vision_cli.py analyze video.mp4 --csv notes.csv
 python scripts/vision_cli.py analyze video.mp4 --truth notes.csv
+python scripts/vision_cli.py analyze video.mp4 --seconds 20 --overlay layout.png
 ```
+
+`--seconds N` разбирает только начало ролика. Клавиатуру и профиль
+визуализатора при этом всё равно ищет по всей длине — медиана по кадрам
+из одного места хуже убирает подсветку. Ключ нужен для первой проверки:
+на пятиминутном ролике полный разбор идёт минуты, а понять, не съехала
+ли разметка, можно за двадцать секунд.
 
 `--csv` пишет найденные ноты, `--truth` читает эталон в том же формате и печатает метрики. Формат простой:
 

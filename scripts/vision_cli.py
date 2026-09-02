@@ -241,7 +241,7 @@ def command_analyze(args: argparse.Namespace) -> int:
         print(f"файл не найден: {video}")
         return 1
 
-    result = analyze_file(video)
+    result = analyze_file(video, max_seconds=args.seconds)
     print_result(result)
 
     if args.csv:
@@ -337,6 +337,11 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--overlay", help="картинка с разметкой клавиатуры")
     analyze.add_argument("--roll", help="картинка с фортепианным валиком")
     analyze.add_argument("--truth", help="CSV с эталонными нотами для сравнения")
+    analyze.add_argument(
+        "--seconds",
+        type=float,
+        help="разобрать только первые N секунд — быстрая проверка разметки",
+    )
     analyze.set_defaults(func=command_analyze)
 
     demo = sub.add_parser("demo", help="синтетический ролик с известным ответом")
