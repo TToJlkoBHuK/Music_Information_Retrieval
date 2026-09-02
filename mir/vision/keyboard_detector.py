@@ -43,6 +43,32 @@ _BLACK_AFTER_WHITE: tuple[bool, ...] = (True, True, False, True, True, True, Fal
 однозначно определить, какая из найденных белых клавиш является «до».
 """
 
+_EXTENT_WINDOW_PERIODS = 2.5
+"""Ширина окна поиска краёв клавиатуры в шагах решётки.
+
+Должна заведомо превышать ширину клавиши, иначе окно, не накрывшее
+ни одного стыка, обнуляет плато и рвёт клавиатуру на куски.
+"""
+
+_HARMONIC_TOLERANCE = 0.95
+"""Насколько составляющая спектра должна быть близка к сильнейшей,
+чтобы считаться той же периодичностью, а не случайным всплеском."""
+
+_EXTENT_GAP_PERIODS = 12.0
+"""Разрыв какой ширины считается перекрытием, а не краем клавиатуры.
+
+Руки исполнителя закрывают до десятка клавиш подряд. Разрыв уже этого
+затягивается, шире — принимается за настоящий край.
+"""
+
+_BLACK_KEY_DARKNESS = 0.8
+"""Во сколько раз граница должна быть темнее соседних белых клавиш.
+
+Сравнение относительное и локальное: тёмная тема, виньетка и неравномерная
+подсветка меняют абсолютную яркость вдоль клавиатуры в разы, а отношение
+«граница к соседям» остаётся тем же.
+"""
+
 _MIN_PATTERN_MARGIN = 0.1
 """Минимальный отрыв верного сдвига от остальных.
 
@@ -212,53 +238,176 @@ class KeyboardDetector:
         confidence = float(np.clip(per_row[top:bottom].mean() / (threshold + 1e-6) - 1.0, 0.0, 1.0))
         return _Band(top=int(top), bottom=int(bottom), confidence=confidence)
 
-    def _find_white_boundaries(self, gray: Frame, band: _Band) -> list[int]:
-        """Найти вертикальные границы белых клавиш.
+    @staticmethod
+    def _gap_profile(gray: Frame, band: _Band) -> Frame:
+        """Профиль темноты по колонкам: пик приходится на стык клавиш.
 
-        Берётся нижняя треть клавиатуры: чёрные клавиши туда не достают,
-        поэтому видны только границы между белыми.
+        Для оценки шага решётки берётся именно темнота, а не модуль
+        градиента: у стыка шириной больше пикселя градиент даёт два
+        всплеска — на входе в тёмную линию и на выходе, — и период
+        определяется вдвое меньше настоящего.
         """
-        strip_top = band.bottom - max(2, (band.bottom - band.top) // 3)
-        strip = gray[strip_top : band.bottom, :].astype(np.float32)
-        profile = np.abs(cv2.Sobel(strip, cv2.CV_32F, 1, 0, ksize=3)).mean(axis=0)
+        strip = gray[band.bottom - max(2, (band.bottom - band.top) // 3) : band.bottom, :]
+        brightness = strip.astype(np.float32).mean(axis=0)
+        darkness: Frame = brightness.max() - brightness
+        return darkness
 
-        threshold = profile.max() * 0.3
-        peaks: list[int] = []
-        for x in range(1, len(profile) - 1):
-            if profile[x] < threshold:
-                continue
-            if (
-                profile[x] >= profile[x - 1]
-                and profile[x] >= profile[x + 1]
-                and (not peaks or x - peaks[-1] > self.config.min_key_width_px)
-            ):
-                peaks.append(x)
+    @staticmethod
+    def _edge_profile(gray: Frame, band: _Band) -> Frame:
+        """Насыщенность вертикальными границами по колонкам.
 
-        if len(peaks) < 8:
+        Берётся нижняя треть полосы: чёрные клавиши туда не достают,
+        поэтому всплески отмечают только стыки между белыми.
+        """
+        strip = gray[band.bottom - max(2, (band.bottom - band.top) // 3) : band.bottom, :]
+        edges: Frame = np.abs(cv2.Sobel(strip.astype(np.float32), cv2.CV_32F, 1, 0, ksize=3))
+        profile: Frame = edges.mean(axis=0)
+        return profile
+
+    def _keyboard_extent(self, profile: Frame, period: float) -> tuple[int, int]:
+        """Левый и правый край клавиатуры по горизонтали.
+
+        Границей служит не яркость, а насыщенность вертикальными краями:
+        внутри клавиатуры они идут регулярно, за её пределами фон ровный.
+        Яркость для этого не годится — тонкие тёмные стыки между белыми
+        клавишами рвут светлую область на полсотни кусков, и самый длинный
+        из них оказывается шириной в одну клавишу.
+
+        Окно расширения привязано к найденному шагу клавиш, а не к ширине
+        кадра: у обрезанной клавиатуры клавиши широкие, и окно постоянной
+        доли кадра оказывалось уже одной клавиши — плато не складывалось.
+        """
+        window = max(int(period * _EXTENT_WINDOW_PERIODS) | 1, 9)
+        plateau = cv2.dilate(profile.reshape(1, -1), np.ones((1, window), dtype=np.uint8)).ravel()
+
+        # Разрывы шириной в несколько клавиш закрываются: руки исполнителя
+        # перекрывают стыки, и без этого самым длинным участком оказывался
+        # кусок клавиатуры сбоку от рук.
+        gap = max(int(period * _EXTENT_GAP_PERIODS) | 1, window)
+        mask = (plateau > plateau.max() * 0.15).astype(np.uint8).reshape(1, -1)
+        closed = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((1, gap), dtype=np.uint8))
+
+        runs = self._runs(closed.ravel() > 0)
+        if not runs:
+            return 0, len(profile)
+        left, right = max(runs, key=lambda run: run[1] - run[0])
+        return int(left), int(right)
+
+    def _find_white_boundaries(self, gray: Frame, band: _Band) -> list[int]:
+        """Построить сетку границ белых клавиш.
+
+        Границы не отбираются по порогу яркости, а восстанавливаются как
+        периодическая решётка. Пороговый отбор на реальном ролике терял
+        треть клавиш: руки исполнителя, блики подсветки и сжатие съедают
+        часть границ, и разброс ширины доходил до шестикратного. Клавиши
+        же равномерны по построению, поэтому период ищется преобразованием
+        Фурье, а сетка достраивается на всю ширину клавиатуры — включая
+        участки, закрытые руками.
+        """
+        profile = self._edge_profile(gray, band)
+        period, phase = self._estimate_period(self._gap_profile(gray, band))
+        if period <= 0:
             raise KeyboardNotFoundError(
-                f"найдено лишь {len(peaks)} границ клавиш",
+                "не удалось определить шаг клавиш",
                 "В этом видео не найдена фортепианная клавиатура",
             )
-        return peaks
+
+        left, right = self._keyboard_extent(profile, period)
+
+        # Счёт ведётся с запасом в одну позицию по обе стороны: фаза может
+        # оказаться близка к целому периоду, и крайняя клавиша тогда
+        # выпадала бы из сетки, укорачивая диапазон на ноту.
+        count = int((right - left) / period) + 2
+        first = int(np.floor((left - phase) / period))
+        candidates = (phase + (first + np.arange(-1, count + 1)) * period).round().astype(int)
+        margin = period * 0.25
+        grid = [
+            int(np.clip(x, 0, gray.shape[1] - 1))
+            for x in candidates
+            if left - margin <= x <= right + margin
+        ]
+
+        if len(grid) < 8:
+            raise KeyboardNotFoundError(
+                f"найдено лишь {len(grid)} границ клавиш",
+                "В этом видео не найдена фортепианная клавиатура",
+            )
+
+        _log.debug("сетка клавиш: шаг %.1f px, границ %d", period, len(grid))
+        return grid
+
+    def _estimate_period(self, profile: Frame) -> tuple[float, float]:
+        """Шаг и смещение решётки клавиш.
+
+        Профиль вертикальных границ — почти чистая периодическая волна:
+        всплеск на каждом стыке белых клавиш. Её частота находится как
+        наибольшая по амплитуде составляющая спектра в диапазоне
+        допустимых ширин клавиши, а фаза — как аргумент той же
+        составляющей. Отдельные пропущенные или лишние всплески на такую
+        оценку почти не влияют: они размазываются по всему спектру.
+        """
+        centered = profile - profile.mean()
+        spectrum = np.fft.rfft(centered)
+        freqs = np.fft.rfftfreq(len(centered))
+
+        min_period = max(self.config.min_key_width_px, 4.0)
+        max_period = len(centered) / 6
+        usable = (freqs >= 1.0 / max_period) & (freqs <= 1.0 / min_period)
+        if not usable.any():
+            return 0.0, 0.0
+
+        magnitudes = np.where(usable, np.abs(spectrum), 0.0)
+        peak = magnitudes.max()
+        if peak <= 0:
+            return 0.0, 0.0
+
+        # Профиль стыков — почти гребёнка узких импульсов, а у неё все
+        # гармоники сопоставимы по амплитуде. Простой максимум спектра
+        # поэтому случайно попадает на вторую или третью гармонику и
+        # занижает шаг вдвое-втрое. Из сопоставимых по силе составляющих
+        # берётся самая низкая по частоте — она и есть основная.
+        candidates = np.flatnonzero(magnitudes >= peak * _HARMONIC_TOLERANCE)
+        index = int(candidates.min())
+        period = float(1.0 / freqs[index])
+
+        # Волна имеет вид cos(2*pi*x/period + arg), максимумы приходятся
+        # на x = -arg * period / (2*pi) с шагом period.
+        phase = float(-np.angle(spectrum[index]) * period / (2 * np.pi)) % period
+        return period, phase
 
     def _detect_black_keys(self, gray: Frame, band: _Band, boundaries: list[int]) -> list[bool]:
         """Для каждой белой клавиши определить, есть ли справа чёрная.
 
-        Проверяется верхняя часть клавиатуры на границе между белыми:
-        тёмное пятно означает чёрную клавишу.
+        Яркость на границе сравнивается с яркостью в центрах двух соседних
+        белых клавиш, а не с общим порогом по всей клавиатуре. Общий порог
+        разваливается на тёмной теме: одна подсвеченная клавиша задирает
+        максимум, и почти каждая граница оказывается «темнее среднего» —
+        на реальном ролике узор выходил из одних сплошных чёрных.
         """
         strip_bottom = band.top + int(
             (band.bottom - band.top) * self.config.black_key_height_ratio * 0.5
         )
         strip = gray[band.top : max(strip_bottom, band.top + 2), :]
-        column_brightness = strip.mean(axis=0)
-        dark_threshold = (column_brightness.max() + column_brightness.min()) / 2
+        column_brightness = strip.mean(axis=0).astype(np.float32)
+        width = len(column_brightness)
+
+        def around(center: float, half: float) -> float:
+            low = max(int(center - half), 0)
+            high = min(int(center + half) + 1, width)
+            window = column_brightness[low:high]
+            return float(window.mean()) if window.size else 0.0
 
         flags: list[bool] = []
         for index in range(len(boundaries) - 1):
             edge = boundaries[index + 1]
-            window = column_brightness[max(edge - 2, 0) : edge + 3]
-            flags.append(bool(window.size and window.mean() < dark_threshold))
+            key_width = boundaries[index + 1] - boundaries[index]
+            half = max(key_width * 0.15, 1.0)
+
+            at_edge = around(edge, half)
+            neighbours = (
+                around(edge - key_width * 0.5, half) + around(edge + key_width * 0.5, half)
+            ) / 2
+            flags.append(at_edge < neighbours * _BLACK_KEY_DARKNESS)
         return flags
 
     def _build_layout(

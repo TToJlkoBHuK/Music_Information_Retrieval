@@ -139,3 +139,64 @@ def test_lower_band_wins_over_upper_one():
     band = KeyboardDetector()._find_band(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
 
     assert band.top > 200
+
+
+def _band(top: int, bottom: int):
+    from mir.vision.keyboard_detector import _Band
+
+    return _Band(top=top, bottom=bottom, confidence=1.0)
+
+
+def test_grid_survives_occluded_keys():
+    """Руки исполнителя закрывают часть стыков — сетка достраивается.
+
+    На реальном ролике пороговый отбор находил 37 клавиш вместо полусотни
+    и давал разброс ширины от 36 до 222 пикселей.
+    """
+    frame = np.full((400, 480, 3), 25, dtype=np.uint8)
+    frame[240:340] = _keyboard_strip(480, 100)
+    frame[300:340, 150:260] = 90  # «рука» поверх нижней части клавиш
+
+    detector = KeyboardDetector()
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    boundaries = detector._find_white_boundaries(gray, _band(240, 340))
+
+    widths = np.diff(boundaries)
+    assert widths.max() - widths.min() <= 1
+    assert len(boundaries) >= 30
+
+
+def test_period_found_for_wide_keys():
+    """Обрезанная клавиатура: клавиш мало, каждая широкая."""
+    frame = np.full((400, 480, 3), 25, dtype=np.uint8)
+    strip = np.full((100, 480, 3), 240, dtype=np.uint8)
+    for x in range(0, 480, 60):
+        strip[:, x : x + 2] = 40
+    frame[240:340] = strip
+
+    detector = KeyboardDetector()
+    profile = detector._gap_profile(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), _band(240, 340))
+    period, _ = detector._estimate_period(profile)
+
+    assert period == pytest.approx(60.0, abs=2.0)
+
+
+def test_black_keys_survive_uneven_lighting():
+    """Общий порог яркости разваливается на тёмной теме.
+
+    Одна подсвеченная клавиша задирает максимум, и почти каждая граница
+    оказывается «темнее среднего» — узор выходил из сплошных чёрных.
+    """
+    frame = np.full((400, 480, 3), 20, dtype=np.uint8)
+    frame[240:340] = 60  # тусклая клавиатура
+    for index in range(8):
+        edge = 30 + index * 50
+        frame[240:300, edge - 6 : edge + 6] = 10  # чёрные клавиши
+    frame[240:340, 400:480] = 250  # яркая подсветка справа
+
+    detector = KeyboardDetector()
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    boundaries = [30 + index * 50 for index in range(9)]
+    flags = detector._detect_black_keys(gray, _band(240, 340), boundaries)
+
+    assert sum(flags) < len(flags)
