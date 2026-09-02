@@ -125,6 +125,17 @@ def _explain(message: str, platform: Platform, proxy: str) -> str:
     return "Не удалось загрузить видео"
 
 
+def _ffmpeg_location() -> str | None:
+    """Каталог с FFmpeg для yt-dlp, если он найден вне PATH."""
+    from mir.ingest.demuxer import find_ffmpeg
+
+    try:
+        ffmpeg, _ = find_ffmpeg()
+    except Exception:
+        return None
+    return str(ffmpeg.parent)
+
+
 class Downloader:
     """Загрузчик роликов с кэшированием и поддержкой прокси.
 
@@ -185,6 +196,13 @@ class Downloader:
         }
         if self._active_proxy:
             options["proxy"] = self._active_proxy
+
+        # yt-dlp ищет FFmpeg только в PATH, а при установке через winget
+        # он туда попадает не всегда. Раз мы уже умеем его находить —
+        # подсказываем путь явно, иначе склейка потоков YouTube упадёт.
+        location = _ffmpeg_location()
+        if location:
+            options["ffmpeg_location"] = location
         return options
 
     def _format_selector(self) -> str:
