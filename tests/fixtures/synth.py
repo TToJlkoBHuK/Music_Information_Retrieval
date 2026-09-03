@@ -254,7 +254,10 @@ def render_visualizer_video(
 
         for index in range(total):
             t = (index - intro_frames) / config.fps
-            frame = np.full(
+            # Тип указан явно: без него он выводится из np.full, и добавление
+            # шума ниже перестаёт ему соответствовать — причём по-разному
+            # в стабах numpy для разных версий Python.
+            frame: Frame = np.full(
                 (config.height, config.width, 3), config.colors.background, dtype=np.uint8
             )
 
@@ -289,9 +292,7 @@ def render_visualizer_video(
 
             if config.noise_sigma > 0:
                 noise = rng.normal(0, config.noise_sigma, frame.shape)
-                frame = np.clip(  # type: ignore[assignment]
-                    frame.astype(np.float32) + noise, 0, 255
-                ).astype(np.uint8)
+                frame = np.clip(frame.astype(np.float32) + noise, 0, 255).astype(np.uint8)
 
             writer.write(frame)
     finally:
