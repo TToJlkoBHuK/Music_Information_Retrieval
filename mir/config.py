@@ -98,6 +98,7 @@ class TrackerConfig:
     off_threshold: float = 0.15
     min_frames_on: int = 2
     velocity_gamma: float = 0.7
+    min_note_duration: float = 0.06
 
 
 @dataclass(frozen=True)
@@ -281,6 +282,8 @@ def validate(config: MirConfig) -> list[str]:
         problems.append("export.ppq должен делиться на 12, иначе триоли округляются")
     if config.ingest.proxy_mode not in ("auto", "none", "manual"):
         problems.append("ingest.proxy_mode: допустимы значения auto, none, manual")
+    if config.vision.tracker.min_note_duration <= 0:
+        problems.append("vision.tracker.min_note_duration должен быть положительным")
     if config.ingest.proxy_mode == "manual" and not config.ingest.proxy:
         problems.append("ingest.proxy_mode=manual требует заполненного ingest.proxy")
     return problems

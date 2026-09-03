@@ -35,6 +35,27 @@ _NETWORK_FAILURE = re.compile(
 )
 """Ошибки, при которых имеет смысл повторить попытку через прокси."""
 
+_TOOL_HINTS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(r"ffmpeg is not installed|ffmpeg.*not found", re.I),
+        "Для склейки видео и звука нужна программа FFmpeg — она не установлена.\n\n"
+        "Windows: winget install Gyan.FFmpeg\n"
+        "После установки перезапустите терминал",
+    ),
+    (
+        re.compile(r"javascript runtime|js.?runtime|deno", re.I),
+        "YouTube требует движок JavaScript, которого нет в системе.\n\n"
+        "Windows: winget install DenoLand.Deno\n"
+        "После установки перезапустите терминал",
+    ),
+)
+"""Нехватка внешних программ.
+
+Проверяется прежде сетевых причин и возвращается без добавок: отсутствие
+FFmpeg выглядит как сбой загрузки, но сеть здесь ни при чём, и совет
+«включите VPN» только уведёт в сторону.
+"""
+
 _ERROR_HINTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         re.compile(r"unable to download|network|timed out|connection|resolve host|tunnel", re.I),
@@ -79,6 +100,10 @@ def _explain(message: str, platform: Platform, proxy: str) -> str:
     «включите VPN» здесь только сбивает с толку — VPN может быть включён,
     а порт прокси указан неверно.
     """
+    for pattern, hint in _TOOL_HINTS:
+        if pattern.search(message):
+            return hint
+
     if proxy and _PROXY_REFUSED.search(message):
         return (
             f"Прокси {proxy} не отвечает.\n\n"
@@ -98,6 +123,17 @@ def _explain(message: str, platform: Platform, proxy: str) -> str:
             "только через VPN — включите его или укажите прокси в настройках"
         )
     return "Не удалось загрузить видео"
+
+
+def _ffmpeg_location() -> str | None:
+    """Каталог с FFmpeg для yt-dlp, если он найден вне PATH."""
+    from mir.ingest.demuxer import find_ffmpeg
+
+    try:
+        ffmpeg, _ = find_ffmpeg()
+    except Exception:
+        return None
+    return str(ffmpeg.parent)
 
 
 class Downloader:
@@ -160,6 +196,13 @@ class Downloader:
         }
         if self._active_proxy:
             options["proxy"] = self._active_proxy
+
+        # yt-dlp ищет FFmpeg только в PATH, а при установке через winget
+        # он туда попадает не всегда. Раз мы уже умеем его находить —
+        # подсказываем путь явно, иначе склейка потоков YouTube упадёт.
+        location = _ffmpeg_location()
+        if location:
+            options["ffmpeg_location"] = location
         return options
 
     def _format_selector(self) -> str:

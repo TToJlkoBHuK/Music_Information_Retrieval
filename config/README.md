@@ -117,8 +117,8 @@ class MirConfig:
     notation: NotationConfig
     export: ExportConfig
 
-def load_config(path: Path | None = None,
-                overrides: dict | None = None) -> MirConfig:
+
+def load_config(path: Path | None = None, overrides: dict | None = None) -> MirConfig:
     """
     Приоритет источников, от низшего к высшему:
       1. config/default.toml
@@ -130,11 +130,12 @@ def load_config(path: Path | None = None,
     ошибка вместо падения где-то в глубине конвейера.
     """
 
+
 def validate(config: MirConfig) -> list[str]:
     """Проверки, которые нельзя выразить типами:
-      - off_threshold < on_threshold (иначе гистерезис не работает)
-      - overlap_seconds < chunk_seconds
-      - 0 <= quantize_strength <= 1
-      - hand_split_pitch в диапазоне 21..108
+    - off_threshold < on_threshold (иначе гистерезис не работает)
+    - overlap_seconds < chunk_seconds
+    - 0 <= quantize_strength <= 1
+    - hand_split_pitch в диапазоне 21..108
     """
 ```

@@ -14,9 +14,12 @@
 
 from __future__ import annotations
 
+import glob
 import json
+import os
 import shutil
 import subprocess
+import sys
 from fractions import Fraction
 from pathlib import Path
 
@@ -26,28 +29,103 @@ from mir.common.logging import get_logger
 from mir.common.types import MediaBundle, ProgressCallback
 from mir.config import IngestConfig
 
-__all__ = ["Demuxer", "ProbeResult", "find_ffmpeg"]
+__all__ = ["FFMPEG_DIR_ENV", "Demuxer", "ProbeResult", "find_ffmpeg"]
 
 _log = get_logger(__name__)
+
+
+FFMPEG_DIR_ENV = "MIR_FFMPEG_DIR"
+"""Переменная окружения с каталогом FFmpeg — последнее слово за пользователем."""
+
+_WINDOWS_FFMPEG_GLOBS: tuple[str, ...] = (
+    r"%LOCALAPPDATA%\Microsoft\WinGet\Links",
+    r"%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg*\*\bin",
+    r"%LOCALAPPDATA%\Microsoft\WinGet\Packages\*FFmpeg*\*\bin",
+    r"%ProgramData%\chocolatey\bin",
+    r"%ProgramFiles%\ffmpeg\bin",
+    r"C:\ffmpeg\bin",
+)
+"""Куда попадает FFmpeg на Windows при обычных способах установки.
+
+Ставится он чаще всего через winget или chocolatey, и те кладут его
+в свои каталоги. PATH при этом обновляется не всегда: у winget ссылки
+появляются в новом сеансе, а запущенный терминал их не подхватывает.
+Просить пользователя настольного приложения править PATH руками — плохой
+обмен, поэтому известные места проверяются самостоятельно.
+"""
+
+_UNIX_FFMPEG_DIRS: tuple[str, ...] = (
+    "/usr/bin",
+    "/usr/local/bin",
+    "/opt/homebrew/bin",
+    "/snap/bin",
+)
+
+
+def _candidate_dirs() -> list[Path]:
+    """Каталоги, где стоит поискать FFmpeg помимо PATH."""
+    dirs: list[Path] = []
+    explicit = os.environ.get(FFMPEG_DIR_ENV)
+    if explicit:
+        dirs.append(Path(explicit))
+
+    # Рядом с проектом: удобно для переносимой сборки и для проверяющего,
+    # который не хочет ставить FFmpeg в систему.
+    dirs.append(Path(__file__).resolve().parent.parent.parent / "tools" / "ffmpeg" / "bin")
+
+    if sys.platform == "win32":
+        for pattern in _WINDOWS_FFMPEG_GLOBS:
+            expanded = os.path.expandvars(pattern)
+            if "*" in expanded:
+                dirs.extend(sorted(Path(match) for match in glob.glob(expanded)))
+            else:
+                dirs.append(Path(expanded))
+    else:
+        dirs.extend(Path(d) for d in _UNIX_FFMPEG_DIRS)
+
+    return dirs
+
+
+def _lookup(name: str) -> Path | None:
+    """Найти утилиту в PATH, затем в известных каталогах."""
+    found = shutil.which(name)
+    if found:
+        return Path(found)
+
+    suffix = ".exe" if sys.platform == "win32" else ""
+    for directory in _candidate_dirs():
+        candidate = directory / f"{name}{suffix}"
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def find_ffmpeg() -> tuple[Path, Path]:
     """Найти ffmpeg и ffprobe.
 
+    Ищет в PATH, затем в каталогах, куда FFmpeg попадает при установке
+    через winget, chocolatey и распаковкой архива, затем в `tools/ffmpeg/bin`
+    рядом с проектом. Каталог можно задать явно переменной `MIR_FFMPEG_DIR`.
+
     Returns:
         Пути к обеим утилитам.
 
     Raises:
-        DemuxError: Утилиты не найдены в PATH.
+        DemuxError: Утилиты не найдены.
     """
-    ffmpeg = shutil.which("ffmpeg")
-    ffprobe = shutil.which("ffprobe")
-    if not ffmpeg or not ffprobe:
+    ffmpeg = _lookup("ffmpeg")
+    ffprobe = _lookup("ffprobe")
+    if ffmpeg is None or ffprobe is None:
+        missing = "ffmpeg" if ffmpeg is None else "ffprobe"
         raise DemuxError(
-            "ffmpeg или ffprobe не найдены в PATH",
-            "Не найдена программа FFmpeg. Установите её и перезапустите приложение",
+            f"{missing} не найден ни в PATH, ни в типичных местах установки",
+            "Не найдена программа FFmpeg.\n\n"
+            "Windows: winget install Gyan.FFmpeg, затем перезапустите терминал.\n"
+            f"Если она уже установлена, укажите каталог: set {FFMPEG_DIR_ENV}=C:\\путь\\к\\bin",
         )
-    return Path(ffmpeg), Path(ffprobe)
+    if shutil.which("ffmpeg") is None:
+        _log.info("FFmpeg найден вне PATH: %s", ffmpeg.parent)
+    return ffmpeg, ffprobe
 
 
 class ProbeResult:

@@ -80,6 +80,7 @@ nav:
       - Требования: requirements.md
       - Запуск и проверка: quickstart.md
       - Как смотреть тесты: testing.md
+      - Известные дефекты: known-issues.md
   - Аналитика:
       - Обзор литературы: literature-review.md
       - Существующие решения: competitors.md
@@ -89,6 +90,7 @@ nav:
       - Общие типы: modules/common.md
       - Загрузка: modules/ingest.md
       - Компьютерное зрение: modules/vision.md
+      - Метрики качества: modules/eval.md
       - Анализ звука: modules/audio.md
       - Слияние каналов: modules/fusion.md
       - Нотный текст: modules/notation.md

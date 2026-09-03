@@ -75,6 +75,13 @@ def ingest(
         DemuxError: Файл повреждён или без звука.
     """
     config = config or load_config()
+
+    # FFmpeg проверяется до скачивания, а не после. Он нужен и для склейки
+    # раздельных потоков YouTube, и для извлечения аудиодорожки, поэтому
+    # без него смысла качать нет: пользователь ждал бы минуту загрузки,
+    # чтобы получить отказ на последнем шаге.
+    find_ffmpeg()
+
     work_dir = work_dir or Path(tempfile.mkdtemp(prefix="mir_"))
     work_dir.mkdir(parents=True, exist_ok=True)
 

@@ -10,12 +10,16 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, TypeAlias
+
+import numpy.typing as npt
 
 from mir.common.enums import Hand, Platform, Source, Stage
 
 __all__ = [
     "PITCH_MAX",
     "PITCH_MIN",
+    "Frame",
     "KeySlot",
     "KeyboardLayout",
     "MediaBundle",
@@ -32,6 +36,15 @@ PITCH_MAX = 108
 
 ProgressCallback = Callable[[Stage, float], None]
 """Колбэк прогресса: этап и доля выполнения в диапазоне 0..1."""
+
+Frame: TypeAlias = "npt.NDArray[Any]"
+"""Кадр видео: плотный массив `uint8`, обычно BGR или HSV.
+
+Точный тип элемента не указан намеренно. OpenCV объявляет возвращаемое
+значение как `Mat | ndarray[Any, dtype[integer | floating]]`, и любая
+попытка сузить его до `uint8` заставила бы расставлять `cast` вокруг
+каждого вызова, ничего не проверяя по существу.
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +124,13 @@ class KeyboardLayout:
         highest_pitch: Верхняя видимая нота.
         is_cropped: Видны не все 88 клавиш.
         confidence: Качество детекции, 0..1.
+        octave_candidates: Другие возможные значения `lowest_pitch`.
+
+            Узор чёрных клавиш повторяется каждую октаву, поэтому при
+            обрезанной клавиатуре видеоканал определяет позицию внутри
+            октавы, но не саму октаву. Здесь перечислены равновозможные
+            варианты; выбрать верный помогает аудиоканал, где высоты
+            абсолютны. Пусто, если неоднозначности нет.
     """
 
     bbox: tuple[int, int, int, int]
@@ -119,6 +139,12 @@ class KeyboardLayout:
     highest_pitch: int
     is_cropped: bool
     confidence: float
+    octave_candidates: tuple[int, ...] = ()
+
+    @property
+    def octave_ambiguous(self) -> bool:
+        """Октава определена неоднозначно и требует проверки по звуку."""
+        return len(self.octave_candidates) > 1
 
     def pitch_at(self, x: int) -> int | None:
         """Определить ноту по горизонтальной координате.

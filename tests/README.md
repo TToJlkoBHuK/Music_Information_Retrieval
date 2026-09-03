@@ -85,31 +85,19 @@ def midi_to_note_events(midi_path: Path) -> list[NoteEvent]:
 
 `test_fusion_gain.py` — самый ценный тест в проекте. Он проверяет ровно то, что заявлено новизной работы, и его результат идёт прямо в диплом графиком.
 
-## Метрики (`scripts/evaluate.py`)
+## Метрики
+
+Считаются модулем [`mir.eval`][], который реализует правила MIREX для задачи Note Tracking. Обоснование выбора и правила сопоставления — в `mir/eval/README.md`.
+
+Интеграционные тесты печатают отчёт прямо в вывод pytest:
 
 ```python
-@dataclass
-class TranscriptionMetrics:
-    note_precision: float
-    note_recall: float
-    note_f1: float
-    onset_mae_ms: float  # средняя ошибка по времени атаки
-    duration_mae_beats: float
-    key_correct: bool
-    time_signature_correct: bool
-    tempo_error_percent: float
-    hand_accuracy: float  # доля нот в правильной руке
-
-
-def evaluate(
-    predicted: list[NoteEvent], reference: list[NoteEvent], onset_tolerance: float = 0.05
-) -> TranscriptionMetrics:
-    """Допуск 50 мс — стандарт в MIR (используется в MIREX
-    и в mir_eval), берём его, чтобы цифры были сопоставимы
-    с опубликованными результатами других работ."""
+score = evaluate(melody, result.notes)
+print("\n" + score.format_report("синтетический ролик, чистые условия"))
+assert score.f1 == pytest.approx(1.0)
 ```
 
-Считать через `mir_eval.transcription`, а не своими руками: так результаты сравнимы с литературой, и на защите не будет вопросов к методике.
+Пороги в утверждениях — зафиксированные требования к качеству. Правка алгоритма, ухудшающая результат, уронит сборку, а не пройдёт незамеченной.
 
 ## Запуск
 
@@ -117,11 +105,13 @@ def evaluate(
 pytest tests/unit -q                    # быстрые, при каждом изменении
 pytest tests/integration -q             # медленные, перед коммитом
 pytest --cov=mir --cov-report=html      # покрытие
+pytest --html=report.html               # отчёт для приложения к работе
 ```
 
-Тесты, требующие GPU или установленного MuseScore, помечаются:
+Тесты, требующие внешних программ, помечаются:
 
 ```python
+@pytest.mark.requires_ffmpeg
 @pytest.mark.requires_gpu
 @pytest.mark.requires_musescore
 ```
@@ -130,4 +120,18 @@ pytest --cov=mir --cov-report=html      # покрытие
 
 ## C++ тесты
 
-Живут отдельно, в `core/tests/`, запускаются через CTest — см. `core/README.md`.
+Живут отдельно, в `core/tests/`. Собираются вместе с ядром и запускаются напрямую:
+
+```bash
+cmake -B core/build -S core -DCMAKE_BUILD_TYPE=Release
+cmake --build core/build --config Release
+./core/build/mir_core_tests
+```
+
+Подробности — в `core/README.md`.
+
+## Ядро и запасная реализация проверяются вместе
+
+`tests/unit/test_accel.py` сравнивает нативное ядро с реализацией на numpy на общих данных. Расхождение означало бы, что результат распознавания зависит от наличия компилятора у пользователя.
+
+В CI набор прогоняется дважды: до сборки ядра и после. Так проверяется, что проект работает в обеих конфигурациях.
