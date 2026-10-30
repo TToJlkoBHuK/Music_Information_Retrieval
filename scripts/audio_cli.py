@@ -17,6 +17,7 @@ python scripts/audio_cli.py analyze video.mp4 --clicks beats.wav
 python scripts/audio_cli.py analyze video.mp4 --no-transcribe --seconds 30
 python scripts/audio_cli.py analyze audio.wav --csv notes_audio.csv --truth notes.csv
 python scripts/audio_cli.py sync video.mp4 --video-csv notes_video.csv --audio-csv notes_audio.csv
+python scripts/audio_cli.py compare --video-csv v.csv --audio-csv a.csv --roll roll.png --end 40
 python scripts/audio_cli.py fetch-model
 python scripts/audio_cli.py doctor
 ```
@@ -400,6 +401,83 @@ def _onset_report(truth: list[NoteEvent], onsets: npt.NDArray[np.float64]) -> st
     )
 
 
+def draw_two_rolls(
+    video: list[NoteEvent], audio: list[NoteEvent], start: float, end: float, out: Path
+) -> None:
+    """Два валика на одной картинке: звук зелёным, видео красным.
+
+    Совпавшие ноты ложатся друг на друга. Если красные полосы стабильно
+    смещены по высоте относительно зелёных — видео ошибается в нотах;
+    если по времени — это рассинхрон.
+    """
+    import cv2
+
+    width, height, left, bottom = 1600, 720, 60, 30
+    canvas = np.full((height, width, 3), 255, dtype=np.uint8)
+
+    def y(pitch: float) -> int:
+        return int(height - bottom - (pitch - 21) / 87 * (height - bottom - 30))
+
+    def x(t: float) -> int:
+        return int(left + (t - start) / (end - start) * (width - left - 20))
+
+    for pitch in range(24, 109, 12):
+        cv2.line(canvas, (left, y(pitch)), (width - 20, y(pitch)), (225, 225, 225), 1)
+        cv2.putText(canvas, note_name(pitch), (8, y(pitch) + 4), 0, 0.4, (0, 0, 0), 1)
+    span = max(int((end - start) / 10), 1)
+    for second in range(int(start), int(end) + 1, span):
+        cv2.line(canvas, (x(second), 25), (x(second), height - bottom), (235, 235, 235), 1)
+        cv2.putText(canvas, f"{second}s", (x(second) - 10, height - 10), 0, 0.4, (0, 0, 0), 1)
+    for notes, colour, lift in ((audio, (40, 160, 40), -2), (video, (40, 40, 220), 2)):
+        for note in notes:
+            if note.offset < start or note.onset > end:
+                continue
+            top = y(note.pitch) + lift
+            cv2.rectangle(
+                canvas,
+                (x(max(note.onset, start)), top - 2),
+                (x(min(note.offset, end)), top + 1),
+                colour,
+                -1,
+            )
+    cv2.putText(canvas, "green: audio   red: video", (left + 10, 18), 0, 0.5, (0, 0, 0), 1)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(out), canvas)
+    print(f"валики          : {out}")
+
+
+def command_compare(args: argparse.Namespace) -> int:
+    """Сверить ноты видео и звука без эталона."""
+    from mir.eval import compare_channels
+
+    video = read_notes_csv(Path(args.video_csv))
+    audio = read_notes_csv(Path(args.audio_csv))
+    print(f"нот             : видео {len(video)}, звук {len(audio)}")
+
+    result = compare_channels(video, audio)
+    if abs(result.time_shift) >= 0.95:
+        where = "сдвиг по времени не найден — упёрся в предел поиска ±1 с"
+    else:
+        where = f"сдвиг звука относительно видео {result.time_shift * 1000:+.0f} мс"
+    print(f"совпадение      : {result.similarity:.2f} ({where})")
+    top = sorted(result.pitch_shifts.items(), key=lambda item: -item[1])[:3]
+    print("лучшие сдвиги высоты видео: " + ", ".join(f"{k:+d} → {v:.2f}" for k, v in top))
+    if result.pitch_consistent:
+        print("  высоты каналов согласованы")
+    else:
+        print(
+            f"  совпадение лучше при сдвиге {result.best_pitch_shift:+d} полутонов: "
+            "один из каналов ошибается в высоте нот"
+        )
+    print("  (ориентир: 1.0 — валики совпадают полностью; у верных каналов")
+    print("   длительности расходятся из-за педали, поэтому заметно меньше 1)")
+
+    if args.roll:
+        end = args.end or max((n.offset for n in [*video, *audio]), default=0.0)
+        draw_two_rolls(video, audio, args.start, end, Path(args.roll))
+    return 0
+
+
 def command_demo(args: argparse.Namespace) -> int:
     """Синтетика с известным ответом: атаки, темп, рассинхрон.
 
@@ -546,6 +624,14 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--device", choices=["auto", "cpu", "cuda"])
     sync.add_argument("--aligned-csv", help="сохранить ноты звука, перенесённые на шкалу видео")
     sync.set_defaults(func=command_sync)
+
+    compare = sub.add_parser("compare", help="сверить ноты видео и звука без эталона")
+    compare.add_argument("--video-csv", required=True, help="ноты из run analyze --csv")
+    compare.add_argument("--audio-csv", required=True, help="ноты из run audio analyze --csv")
+    compare.add_argument("--roll", help="картинка: оба валика на одной оси")
+    compare.add_argument("--start", type=float, default=0.0, help="начало окна картинки, с")
+    compare.add_argument("--end", type=float, help="конец окна картинки, с")
+    compare.set_defaults(func=command_compare)
 
     demo = sub.add_parser("demo", help="синтетика с известным ответом")
     demo.add_argument("--bpm", type=float, default=100.0)
