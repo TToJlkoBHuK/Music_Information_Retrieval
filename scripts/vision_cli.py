@@ -20,7 +20,6 @@ python scripts/vision_cli.py analyze video.mp4 --truth notes.csv
 from __future__ import annotations
 
 import argparse
-import csv
 import logging
 import sys
 from pathlib import Path
@@ -47,7 +46,7 @@ from mir.common.enums import Hand
 from mir.common.errors import KeyboardNotFoundError
 from mir.common.logging import setup_logging
 from mir.common.types import Frame, KeyboardLayout, NoteEvent
-from mir.eval import evaluate
+from mir.eval import evaluate, read_notes_csv, write_notes_csv
 from mir.vision import accel
 from mir.vision.analyzer import VisionResult, analyze_file
 
@@ -200,38 +199,6 @@ def print_result(result: VisionResult) -> None:
     )
     for warning in result.warnings:
         print(f"  предупреждение: {warning}")
-
-
-def write_csv(notes: list[NoteEvent], path: Path) -> None:
-    """Сохранить ноты в CSV — тот же формат читается ключом --truth."""
-    with path.open("w", encoding="utf-8", newline="") as fh:
-        writer = csv.writer(fh)
-        writer.writerow(["pitch", "onset", "offset", "velocity", "hand"])
-        for note in notes:
-            writer.writerow(
-                [
-                    note.pitch,
-                    f"{note.onset:.4f}",
-                    f"{note.offset:.4f}",
-                    note.velocity,
-                    note.hand.name,
-                ]
-            )
-
-
-def read_csv(path: Path) -> list[NoteEvent]:
-    """Прочитать эталонные ноты."""
-    with path.open(encoding="utf-8", newline="") as fh:
-        return [
-            NoteEvent(
-                pitch=int(row["pitch"]),
-                onset=float(row["onset"]),
-                offset=float(row["offset"]),
-                velocity=int(row.get("velocity") or 64),
-                hand=Hand[row.get("hand") or "UNKNOWN"],
-            )
-            for row in csv.DictReader(fh)
-        ]
 
 
 def _save(image: Frame, path: Path, what: str) -> None:
@@ -422,7 +389,7 @@ def command_analyze(args: argparse.Namespace) -> int:
     print_result(result)
 
     if args.csv:
-        write_csv(result.notes, Path(args.csv))
+        write_notes_csv(result.notes, Path(args.csv))
         print(f"ноты сохранены: {args.csv}")
 
     if args.overlay:
@@ -436,7 +403,7 @@ def command_analyze(args: argparse.Namespace) -> int:
         _save(draw_piano_roll(result.notes, title=video.name), Path(args.roll), "валик")
 
     if args.truth:
-        score = evaluate(read_csv(Path(args.truth)), result.notes)
+        score = evaluate(read_notes_csv(Path(args.truth)), result.notes)
         print()
         print(score.format_report(f"сравнение с {Path(args.truth).name}"))
         return 0 if score.f1 >= args.min_f1 else 1

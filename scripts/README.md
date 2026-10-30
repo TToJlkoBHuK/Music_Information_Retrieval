@@ -10,8 +10,11 @@
 scripts/
 ├── ingest_cli.py    этап 2: ссылка или файл → видео и аудиодорожка
 ├── vision_cli.py    этап 3: разбор видеоряда, картинки, метрики
+├── audio_cli.py     этап 4: ноты по звуку, атаки, темп, рассинхрон
 └── bench_core.py    сравнение нативного ядра с numpy
 ```
+
+Через `run.cmd` всё это запускается одной командой с правильным интерпретатором: `run demo`, `run audio demo`, `run audio analyze video.mp4`.
 
 ## `vision_cli.py`
 
@@ -64,14 +67,69 @@ python scripts/vision_cli.py analyze video.mp4 --seconds 20 --overlay layout.png
 на пятиминутном ролике полный разбор идёт минуты, а понять, не съехала
 ли разметка, можно за двадцать секунд.
 
-`--csv` пишет найденные ноты, `--truth` читает эталон в том же формате и печатает метрики. Формат простой:
+`--csv` пишет найденные ноты, `--truth` читает эталон в том же формате и печатает метрики. Формат простой (`mir/eval/notes_io.py`, общий для всех утилит):
 
 ```csv
-pitch,onset,offset,velocity,hand
-60,0.5000,0.9000,90,RIGHT
+pitch,onset,offset,velocity,hand,source,confidence
+60,0.5000,0.9000,90,RIGHT,VIDEO,1.000
 ```
 
+Обязательны первые три столбца — эталон удобно размечать вручную.
+
 Ключ `--min-f1` задаёт порог: при F1 ниже команда возвращает код 1, что позволяет ставить её в CI.
+
+## `audio_cli.py`
+
+Проверка этапа 4 в цифрах и на слух.
+
+### Самопроверка на синтетике
+
+```
+run audio demo
+run audio demo --bpm 140 --subdivision 4 --noise -25
+```
+
+Собирает звук из известного списка нот и печатает ошибку темпа (требование NF-08 — не больше 2 %), точность атак и оценку рассинхрона двумя способами. Сохраняет `build/audio_demo/beats.wav` — звук с наложенными щелчками на найденных долях, высокий щелчок — сильная доля. Нейросеть здесь не проверяется: синтезированный тон — не рояль.
+
+### Разбор своего ролика
+
+```
+run audio analyze video.mp4 --no-transcribe --clicks beats.wav
+run audio analyze video.mp4 --csv audio_notes.csv
+run audio analyze video.mp4 --seconds 30 --start 40
+run audio analyze video.mp4 --bpm 72 --clicks beats.wav
+run audio analyze audio.wav --truth notes.csv --min-f1 0.8
+```
+
+Звук из видео извлекается FFmpeg во временный каталог; WAV, FLAC и MP3 читаются напрямую.
+
+| ключ | что делает |
+|---|---|
+| `--no-transcribe` | без нейросети: только атаки и темп, секунды вместо минут |
+| `--clicks` | WAV со щелчками на долях — **самая быстрая проверка темпа**: послушать десять секунд |
+| `--onset-clicks` | WAV со щелчками на атаках |
+| `--bpm` | задать темп вручную (F-31); сетка выравнивается по звуку, шаг — заданный |
+| `--start`, `--seconds` | разобрать отрезок; время в результатах — время ролика |
+| `--device` | `auto`, `cpu`, `cuda` |
+| `--csv`, `--truth`, `--min-f1` | как у `vision_cli.py` — формат CSV общий |
+
+### Рассинхрон звука и картинки
+
+```
+run analyze video.mp4 --csv video_notes.csv
+run audio sync video.mp4 --video-csv video_notes.csv --aligned-csv audio_aligned.csv
+```
+
+Печатает сдвиг, уверенность и решение — применяется он или нет. Без `--video-csv` видеоряд разбирается заново. Без нейросети оценка идёт только по атакам и на ровном ритме честно отказывается.
+
+### Нейросеть
+
+```
+run audio-setup            PyTorch для процессора + библиотека + веса (172 МБ)
+run audio-setup cuda       то же со сборкой PyTorch для видеокарт NVIDIA
+run audio fetch-model      только веса
+run audio doctor           что установлено, где веса, на чём будет считать
+```
 
 ## `bench_core.py`
 
