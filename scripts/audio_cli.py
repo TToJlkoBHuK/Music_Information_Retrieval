@@ -27,6 +27,7 @@ import argparse
 import logging
 import sys
 import tempfile
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -53,6 +54,7 @@ from mir.audio.models import (
     select_device,
 )
 from mir.audio.signal import save_wav
+from mir.common.enums import Stage
 from mir.common.errors import MirError
 from mir.common.logging import setup_logging
 from mir.common.types import NoteEvent
@@ -116,9 +118,9 @@ def mix_clicks(
     signal = load_audio(audio_path, start, seconds)
     mixed = signal.samples.astype(np.float64) * 0.7
     accent_set = {round(float(t), 4) for t in accents}
-    for time in times:
-        click = _click(signal.sample_rate, round(float(time), 4) in accent_set)
-        at = int(np.rint((time - signal.start) * signal.sample_rate))
+    for moment in times:
+        click = _click(signal.sample_rate, round(float(moment), 4) in accent_set)
+        at = int(np.rint((moment - signal.start) * signal.sample_rate))
         if 0 <= at < len(mixed):
             end = min(at + len(click), len(mixed))
             mixed[at:end] += click[: end - at]
@@ -163,6 +165,48 @@ def print_audio_result(result: AudioResult) -> None:
         print(f"  предупреждение: {warning}")
 
 
+class ProgressLine:
+    """Строка прогресса с оценкой оставшегося времени.
+
+    На полном ролике нейросеть на процессоре работает минутами, и без
+    индикатора консоль выглядит зависшей. Строка перерисовывается на месте
+    и обновляется не чаще раза в секунду — печать не должна тормозить счёт.
+    """
+
+    def __init__(self) -> None:
+        self.started = time.monotonic()
+        self.shown = 0.0
+        self.active = False
+
+    def __call__(self, stage: Stage, fraction: float) -> None:
+        """Обновить строку: этап и доля выполнения 0..1."""
+        now = time.monotonic()
+        if fraction < 1.0 and now - self.shown < 1.0:
+            return
+        self.shown = now
+        elapsed = now - self.started
+        remaining = elapsed / fraction * (1 - fraction) if fraction > 0.02 else None
+        tail = f", осталось ~{_clock(remaining)}" if remaining is not None else ""
+        print(
+            f"\r{stage.title_ru}: {fraction:4.0%} (прошло {_clock(elapsed)}{tail})   ",
+            end="",
+            flush=True,
+        )
+        self.active = True
+
+    def finish(self) -> None:
+        """Перевести строку, чтобы следующий вывод не налез на прогресс."""
+        if self.active:
+            print()
+        self.active = False
+        self.started = time.monotonic()
+
+
+def _clock(seconds: float) -> str:
+    minutes, rest = divmod(int(seconds), 60)
+    return f"{minutes}:{rest:02d}"
+
+
 def command_analyze(args: argparse.Namespace) -> int:
     """Разобрать звук ролика или звуковой файл."""
     source = Path(args.file)
@@ -179,6 +223,7 @@ def command_analyze(args: argparse.Namespace) -> int:
 
     with tempfile.TemporaryDirectory() as tmp:
         audio_path = prepare_audio(source, config, Path(tmp))
+        progress = ProgressLine()
         result = analyze_audio(
             audio_path,
             config,
@@ -186,7 +231,9 @@ def command_analyze(args: argparse.Namespace) -> int:
             force_bpm=args.bpm,
             start_seconds=args.start,
             max_seconds=args.seconds,
+            progress=progress,
         )
+        progress.finish()
         print_audio_result(result)
 
         if args.clicks:
@@ -247,8 +294,9 @@ def command_sync(args: argparse.Namespace) -> int:
     else:
         from mir.vision.analyzer import analyze_file
 
-        print("разбор видеоряда…")
-        video_notes = analyze_file(video, config, None, args.seconds, args.start).notes
+        progress = ProgressLine()
+        video_notes = analyze_file(video, config, progress, args.seconds, args.start).notes
+        progress.finish()
         print(f"ноты видео      : {len(video_notes)}")
     if args.start or args.seconds:
         end = args.start + args.seconds if args.seconds else float("inf")
@@ -257,14 +305,16 @@ def command_sync(args: argparse.Namespace) -> int:
     transcribe = not args.no_transcribe and backend_status() is None
     with tempfile.TemporaryDirectory() as tmp:
         audio_path = prepare_audio(video, config, Path(tmp))
-        print("разбор звука…")
+        progress = ProgressLine()
         audio = analyze_audio(
             audio_path,
             config,
             transcribe=transcribe,
             start_seconds=args.start,
             max_seconds=args.seconds,
+            progress=progress,
         )
+        progress.finish()
 
     fusion = config.fusion
     threshold = fusion.min_offset_confidence
