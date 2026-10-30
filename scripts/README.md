@@ -101,7 +101,7 @@ run audio analyze video.mp4 --bpm 72 --clicks beats.wav
 run audio analyze audio.wav --truth notes.csv --min-f1 0.8
 ```
 
-Звук из видео извлекается FFmpeg во временный каталог; WAV, FLAC и MP3 читаются напрямую.
+Вместо файла можно дать ссылку: `run audio analyze "https://youtu.be/..."`. Ролик скачивается в кэш (`~/.mir_cache`), и повторный запуск с той же ссылкой не качает заново. То же умеют `run audio sync` и `run analyze`. Звук из видео извлекается FFmpeg во временный каталог; WAV, FLAC и MP3 читаются напрямую.
 
 | ключ | что делает |
 |---|---|

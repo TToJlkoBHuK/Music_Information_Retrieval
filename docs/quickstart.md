@@ -265,6 +265,17 @@ run audio doctor                 # что установлено и на чём 
 run audio analyze video.mp4 --seconds 30 --csv audio_notes.csv
 ```
 
+### Ролик по ссылке
+
+Все команды этапов 3 и 4 принимают ссылку вместо файла. Ролик скачивается один раз в кэш, дальше берётся оттуда:
+
+```bash
+run audio analyze "https://youtu.be/ID" --no-transcribe --clicks beats.wav
+run audio analyze "https://youtu.be/ID" --csv audio_notes.csv
+run analyze "https://youtu.be/ID" --csv video_notes.csv
+run audio sync "https://youtu.be/ID" --video-csv video_notes.csv --audio-csv audio_notes.csv
+```
+
 ### Рассинхрон звука и картинки
 
 ```bash

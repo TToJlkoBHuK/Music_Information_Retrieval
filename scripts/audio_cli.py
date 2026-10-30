@@ -12,6 +12,7 @@
 
 ```
 python scripts/audio_cli.py demo
+python scripts/audio_cli.py analyze "https://youtu.be/..." --clicks beats.wav
 python scripts/audio_cli.py analyze video.mp4 --clicks beats.wav
 python scripts/audio_cli.py analyze video.mp4 --no-transcribe --seconds 30
 python scripts/audio_cli.py analyze audio.wav --csv notes_audio.csv --truth notes.csv
@@ -55,7 +56,7 @@ from mir.audio.models import (
 )
 from mir.audio.signal import save_wav
 from mir.common.enums import Stage
-from mir.common.errors import MirError
+from mir.common.errors import MirError, UnsupportedSourceError
 from mir.common.logging import setup_logging
 from mir.common.types import NoteEvent
 from mir.config import MirConfig, load_config
@@ -84,15 +85,40 @@ def _config(args: argparse.Namespace) -> MirConfig:
     return load_config(overrides=overrides or None)
 
 
-def prepare_audio(path: Path, config: MirConfig, work_dir: Path) -> Path:
-    """Видео → WAV через FFmpeg; звуковой файл возвращается как есть."""
-    if path.suffix.lower() not in VIDEO_SUFFIXES:
-        return path
-    from mir.ingest.demuxer import Demuxer
+def resolve_media(source: str, config: MirConfig, work_dir: Path) -> tuple[Path | None, Path]:
+    """Ссылка, видео или звуковой файл → (видео, звук).
 
+    Ссылка проходит этап загрузки целиком: ролик скачивается в кэш,
+    поэтому второй запуск с той же ссылкой не качает заново — только
+    извлекает звук, это секунды.
+
+    Returns:
+        Путь к видео (`None` для звукового файла) и путь к WAV или
+        исходному звуковому файлу.
+
+    Raises:
+        MirError: Ссылка не распознана, скачать не удалось, файла нет.
+    """
+    from mir.ingest import ingest
+    from mir.ingest.demuxer import Demuxer
+    from mir.ingest.sources import is_url
+
+    if is_url(source):
+        progress = ProgressLine()
+        bundle = ingest(source, config, work_dir=work_dir, progress=progress)
+        progress.finish()
+        print(f"ролик           : {bundle.title or '—'}, {bundle.duration:.0f} с")
+        print(f"видео в кэше    : {bundle.video_path}")
+        return bundle.video_path, bundle.audio_path
+
+    path = Path(source)
+    if not path.exists():
+        raise UnsupportedSourceError(f"{path} не найден", f"Файл не найден: {path}")
+    if path.suffix.lower() not in VIDEO_SUFFIXES:
+        return None, path
     out = work_dir / f"{path.stem}.wav"
     print(f"извлечение звука из {path.name}…")
-    return Demuxer(config.ingest).extract_audio(path, out)
+    return path, Demuxer(config.ingest).extract_audio(path, out)
 
 
 def _click(sample_rate: int, accent: bool) -> npt.NDArray[np.float64]:
@@ -177,9 +203,15 @@ class ProgressLine:
         self.started = time.monotonic()
         self.shown = 0.0
         self.active = False
+        self.stage: Stage | None = None
 
     def __call__(self, stage: Stage, fraction: float) -> None:
         """Обновить строку: этап и доля выполнения 0..1."""
+        if stage is not self.stage:
+            # Новый этап — новая строка и свой отсчёт времени: иначе оценка
+            # остатка для распаковки считалась бы по скорости загрузки.
+            self.finish()
+            self.stage = stage
         now = time.monotonic()
         if fraction < 1.0 and now - self.shown < 1.0:
             return
@@ -208,11 +240,7 @@ def _clock(seconds: float) -> str:
 
 
 def command_analyze(args: argparse.Namespace) -> int:
-    """Разобрать звук ролика или звуковой файл."""
-    source = Path(args.file)
-    if not source.exists():
-        print(f"файл не найден: {source}")
-        return 1
+    """Разобрать звук ролика по ссылке, видеофайла или звукового файла."""
     config = _config(args)
 
     if not args.no_transcribe and (problem := backend_status()) is not None:
@@ -222,7 +250,7 @@ def command_analyze(args: argparse.Namespace) -> int:
         return 1
 
     with tempfile.TemporaryDirectory() as tmp:
-        audio_path = prepare_audio(source, config, Path(tmp))
+        _, audio_path = resolve_media(args.file, config, Path(tmp))
         progress = ProgressLine()
         result = analyze_audio(
             audio_path,
@@ -282,11 +310,16 @@ def _print_offset(estimate: OffsetEstimate, threshold: float) -> None:
 
 def command_sync(args: argparse.Namespace) -> int:
     """Оценить сдвиг звука относительно картинки."""
-    video = Path(args.video)
-    if not video.exists():
-        print(f"файл не найден: {video}")
-        return 1
     config = _config(args)
+    with tempfile.TemporaryDirectory() as tmp:
+        return _sync(args, config, Path(tmp))
+
+
+def _sync(args: argparse.Namespace, config: MirConfig, work_dir: Path) -> int:
+    video, audio_path = resolve_media(args.video, config, work_dir)
+    if video is None:
+        print("для оценки рассинхрона нужно видео или ссылка, а не звуковой файл")
+        return 1
 
     if args.video_csv:
         video_notes = read_notes_csv(Path(args.video_csv))
@@ -310,18 +343,16 @@ def command_sync(args: argparse.Namespace) -> int:
         audio_notes = read_notes_csv(Path(args.audio_csv))
         print(f"ноты звука      : {len(audio_notes)} из {args.audio_csv}")
     transcribe = not args.audio_csv and not args.no_transcribe and backend_status() is None
-    with tempfile.TemporaryDirectory() as tmp:
-        audio_path = prepare_audio(video, config, Path(tmp))
-        progress = ProgressLine()
-        audio = analyze_audio(
-            audio_path,
-            config,
-            transcribe=transcribe,
-            start_seconds=args.start,
-            max_seconds=args.seconds,
-            progress=progress,
-        )
-        progress.finish()
+    progress = ProgressLine()
+    audio = analyze_audio(
+        audio_path,
+        config,
+        transcribe=transcribe,
+        start_seconds=args.start,
+        max_seconds=args.seconds,
+        progress=progress,
+    )
+    progress.finish()
     if transcribe:
         audio_notes = audio.notes
     if args.start or args.seconds:
@@ -492,7 +523,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     analyze = sub.add_parser("analyze", help="разобрать звук ролика или звуковой файл")
-    analyze.add_argument("file", help="видео (звук извлекается FFmpeg) или WAV/FLAC/MP3")
+    analyze.add_argument("file", help="ссылка на ролик, видеофайл или WAV/FLAC/MP3")
     analyze.add_argument("--no-transcribe", action="store_true", help="только атаки и темп")
     analyze.add_argument("--bpm", type=float, help="задать темп вручную")
     analyze.add_argument("--start", type=float, default=0.0, help="с какой секунды")
@@ -506,7 +537,7 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.set_defaults(func=command_analyze)
 
     sync = sub.add_parser("sync", help="рассинхрон звука и картинки")
-    sync.add_argument("video")
+    sync.add_argument("video", help="ссылка на ролик или видеофайл")
     sync.add_argument("--video-csv", help="ноты видео из vision_cli analyze --csv")
     sync.add_argument("--audio-csv", help="ноты звука из audio_cli analyze --csv")
     sync.add_argument("--no-transcribe", action="store_true", help="оценка только по атакам")

@@ -358,9 +358,39 @@ def _draw_row_profile(median: Frame, per_row: Frame, threshold: float, band: obj
     return canvas
 
 
+def _download(url: str) -> Path | None:
+    """Скачать ролик в кэш. Повторный запуск с той же ссылкой не качает заново."""
+    from mir.common.errors import MirError
+    from mir.config import load_config
+    from mir.ingest.demuxer import find_ffmpeg
+    from mir.ingest.downloader import Downloader
+
+    def show(_stage: object, fraction: float) -> None:
+        end = "\n" if fraction >= 1.0 else ""
+        print(f"\rзагрузка ролика: {fraction:4.0%}", end=end, flush=True)
+
+    try:
+        find_ffmpeg()
+        video = Downloader(load_config().ingest).fetch(url, progress=show, use_cache=True)
+    except MirError as exc:
+        print()
+        print(f"Не удалось получить ролик: {exc.user_message}")
+        print(f"  причина: {exc}")
+        return None
+    print(f"видео в кэше    : {video}")
+    return video
+
+
 def command_analyze(args: argparse.Namespace) -> int:
-    """Разобрать готовый ролик."""
-    video = Path(args.video)
+    """Разобрать ролик по ссылке или готовый видеофайл."""
+    from mir.ingest.sources import is_url
+
+    if is_url(args.video):
+        video = _download(args.video)
+        if video is None:
+            return 1
+    else:
+        video = Path(args.video)
     if not video.exists():
         print(f"файл не найден: {video}")
         return 1
@@ -476,7 +506,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     analyze = sub.add_parser("analyze", help="разобрать готовый ролик")
-    analyze.add_argument("video")
+    analyze.add_argument("video", help="ссылка на ролик или видеофайл")
     analyze.add_argument("--csv", help="куда сохранить найденные ноты")
     analyze.add_argument("--overlay", help="картинка с разметкой клавиатуры")
     analyze.add_argument("--roll", help="картинка с фортепианным валиком")
