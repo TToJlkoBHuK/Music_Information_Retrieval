@@ -110,3 +110,35 @@ class TestIngestPipeline:
         with pytest.raises(DemuxError) as info:
             ingest(broken, config=config, work_dir=tmp_path / "work")
         assert "Битый файл.mp4" in info.value.user_message
+
+
+class TestCachedLinkWorksOffline:
+    """Скачанный ролик не должен требовать сети при повторных запусках."""
+
+    def test_no_network_for_cached_video(
+        self, sample_video: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import shutil
+
+        from mir.config import load_config
+        from mir.ingest.cache import MediaCache
+        from mir.ingest.downloader import Downloader
+
+        config = load_config(
+            overrides={"ingest": {"cache_dir": str(tmp_path / "cache")}},
+            use_user_config=False,
+            use_env=False,
+        )
+        url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        copy = tmp_path / "copy.mp4"
+        shutil.copy(sample_video, copy)
+        MediaCache(config.ingest.cache_path).put(url, copy, title="Этюд")
+
+        def no_network(*args: object, **kwargs: object) -> None:
+            raise AssertionError("обращение к сети при ролике в кэше")
+
+        monkeypatch.setattr(Downloader, "probe", no_network)
+        bundle = ingest(url, config=config, work_dir=tmp_path / "work")
+
+        assert bundle.title == "Этюд"
+        assert bundle.audio_path.exists()

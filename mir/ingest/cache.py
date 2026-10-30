@@ -99,6 +99,11 @@ class MediaCache:
         _log.info("ролик найден в кэше: %s", entry.filename)
         return path
 
+    def title_of(self, url: str) -> str | None:
+        """Название ролика, сохранённое при загрузке, — без обращения к сети."""
+        entry = self._index.get(self.key_for(url))
+        return entry.title if entry is not None else None
+
     def put(self, url: str, path: Path, title: str | None = None) -> Path:
         """Поместить файл в кэш.
 
