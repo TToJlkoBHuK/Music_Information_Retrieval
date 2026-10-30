@@ -73,9 +73,26 @@ class TestValidation:
         with pytest.raises(ConfigError, match="гистерезис"):
             clean_load(overrides={"vision": {"tracker": {"off_threshold": 0.9}}})
 
-    def test_overlap_must_be_smaller(self, clean_load) -> None:
-        with pytest.raises(ConfigError, match="overlap_seconds"):
-            clean_load(overrides={"audio": {"overlap_seconds": 120.0}})
+    def test_bpm_range_ordered(self, clean_load) -> None:
+        with pytest.raises(ConfigError, match="min_bpm"):
+            clean_load(overrides={"audio": {"min_bpm": 300.0}})
+
+    def test_bpm_range_fits_octave_correction(self, clean_load) -> None:
+        """Исправлению ошибки вдвое нужен диапазон хотя бы в октаву."""
+        with pytest.raises(ConfigError, match="вдвое"):
+            clean_load(overrides={"audio": {"min_bpm": 100.0, "max_bpm": 150.0}})
+
+    def test_unknown_device_rejected(self, clean_load) -> None:
+        with pytest.raises(ConfigError, match=r"audio\.device"):
+            clean_load(overrides={"audio": {"device": "tpu"}})
+
+    def test_model_thresholds_in_unit_range(self, clean_load) -> None:
+        with pytest.raises(ConfigError, match="frame_threshold"):
+            clean_load(overrides={"audio": {"frame_threshold": 1.5}})
+
+    def test_offset_resolution_below_smoothing(self, clean_load) -> None:
+        with pytest.raises(ConfigError, match="offset_resolution"):
+            clean_load(overrides={"fusion": {"offset_resolution": 0.05}})
 
     def test_quantize_range(self, clean_load) -> None:
         with pytest.raises(ConfigError, match="quantize_strength"):

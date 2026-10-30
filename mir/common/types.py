@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeAlias
 
+import numpy as np
 import numpy.typing as npt
 
 from mir.common.enums import Hand, Platform, Source, Stage
@@ -19,12 +20,15 @@ from mir.common.enums import Hand, Platform, Source, Stage
 __all__ = [
     "PITCH_MAX",
     "PITCH_MIN",
+    "CancelCheck",
     "Frame",
     "KeySlot",
     "KeyboardLayout",
     "MediaBundle",
     "NoteEvent",
+    "PedalEvent",
     "ProgressCallback",
+    "TempoMap",
     "VideoInfo",
 ]
 
@@ -36,6 +40,13 @@ PITCH_MAX = 108
 
 ProgressCallback = Callable[[Stage, float], None]
 """Колбэк прогресса: этап и доля выполнения в диапазоне 0..1."""
+
+CancelCheck = Callable[[], bool]
+"""Опрос отмены: `True` — пользователь нажал «Отмена», работу пора прервать.
+
+Функция, а не флаг: интерфейс держит `threading.Event`, CLI — ничего,
+и обоим удобно передать то, что у них есть, не подстраиваясь под тип.
+"""
 
 Frame: TypeAlias = "npt.NDArray[Any]"
 """Кадр видео: плотный массив `uint8`, обычно BGR или HSV.
@@ -89,6 +100,187 @@ class NoteEvent:
     def duration(self) -> float:
         """Длительность звучания в секундах."""
         return self.offset - self.onset
+
+
+@dataclass(frozen=True, slots=True)
+class PedalEvent:
+    """Нажатие правой педали (F-13).
+
+    Attributes:
+        onset: Момент нажатия, секунды.
+        offset: Момент отпускания, секунды.
+    """
+
+    onset: float
+    offset: float
+
+    def __post_init__(self) -> None:
+        if self.offset <= self.onset:
+            raise ValueError(f"offset={self.offset} должен быть строго больше onset={self.onset}")
+
+    @property
+    def duration(self) -> float:
+        """Сколько педаль была нажата, секунды."""
+        return self.offset - self.onset
+
+
+def _frozen_array(values: npt.ArrayLike) -> npt.NDArray[np.float64]:
+    """Копия массива, защищённая от записи.
+
+    `frozen=True` у датакласса запрещает заменить поле, но не изменить
+    содержимое массива на месте. Без этой защиты сетку долей можно было бы
+    незаметно испортить из любого этапа.
+    """
+    array = np.array(values, dtype=np.float64)
+    array.flags.writeable = False
+    return array
+
+
+@dataclass(frozen=True, eq=False)
+class TempoMap:
+    """Временна́я сетка: где лежат доли.
+
+    Перевод секунд в доли идёт интерполяцией по найденным долям, а не
+    делением на средний темп. У живого исполнения темп плавает, и линейная
+    формула накапливает ошибку: при отклонении темпа на 3 % к сотой доле
+    сетка уезжает на три доли.
+
+    Attributes:
+        beats: Моменты долей, секунды. Строго возрастают, не меньше двух.
+        downbeats: Моменты сильных долей — начала тактов.
+        beats_per_bar: Долей в такте, по которому расставлены `downbeats`.
+            Предварительное значение: размер определяется на этапе 5 (#33).
+        confidence: Насколько сетка совпадает с атаками звука, 0..1.
+            Низкое значение означает rubato или сложный ритм.
+        is_manual: Темп задан пользователем (F-31), а не найден.
+    """
+
+    beats: npt.NDArray[np.float64]
+    downbeats: npt.NDArray[np.float64] = field(default_factory=lambda: _frozen_array([]))
+    beats_per_bar: int = 4
+    confidence: float = 1.0
+    is_manual: bool = False
+
+    def __post_init__(self) -> None:
+        beats = _frozen_array(self.beats)
+        if beats.ndim != 1 or len(beats) < 2:
+            raise ValueError("сетке нужно не меньше двух долей")
+        if not np.all(np.diff(beats) > 0):
+            raise ValueError("моменты долей должны строго возрастать")
+        if self.beats_per_bar < 1:
+            raise ValueError(f"beats_per_bar={self.beats_per_bar} должен быть положительным")
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError(f"confidence={self.confidence} вне диапазона 0..1")
+        object.__setattr__(self, "beats", beats)
+        object.__setattr__(self, "downbeats", _frozen_array(self.downbeats))
+
+    @classmethod
+    def constant(
+        cls,
+        bpm: float,
+        duration: float,
+        start: float = 0.0,
+        beats_per_bar: int = 4,
+        is_manual: bool = True,
+    ) -> TempoMap:
+        """Ровная сетка с постоянным темпом.
+
+        Args:
+            bpm: Темп, долей в минуту.
+            duration: До какого момента строить сетку, секунды.
+            start: Момент первой доли.
+            beats_per_bar: Долей в такте; первая доля считается сильной.
+            is_manual: Темп задан пользователем.
+        """
+        if bpm <= 0:
+            raise ValueError(f"bpm={bpm} должен быть положительным")
+        period = 60.0 / bpm
+        count = max(int(np.ceil((duration - start) / period)) + 1, 2)
+        beats = (start + np.arange(count) * period).astype(np.float64)
+        return cls(
+            beats=beats,
+            downbeats=beats[::beats_per_bar],
+            beats_per_bar=beats_per_bar,
+            confidence=1.0,
+            is_manual=is_manual,
+        )
+
+    @property
+    def bpm(self) -> float:
+        """Средний темп по всей сетке, долей в минуту.
+
+        Берётся по крайним долям, а не по медиане интервалов: интервалы
+        квантованы шагом анализа (8 мс), и медиана по ним даёт ошибку
+        до процента, тогда как среднее по сотне долей — сотые доли процента.
+        """
+        span = float(self.beats[-1] - self.beats[0])
+        return 60.0 * (len(self.beats) - 1) / span
+
+    def seconds_to_beats_array(self, times: npt.ArrayLike) -> npt.NDArray[np.float64]:
+        """Секунды → позиция в долях для массива моментов.
+
+        Вне сетки позиция продолжается с темпом крайнего интервала.
+        """
+        t = np.asarray(times, dtype=np.float64)
+        beats = self.beats
+        index = np.arange(len(beats), dtype=np.float64)
+        result = np.interp(t, beats, index)
+        first = float(beats[1] - beats[0])
+        last = float(beats[-1] - beats[-2])
+        result = np.where(t < beats[0], (t - beats[0]) / first, result)
+        result = np.where(t > beats[-1], len(beats) - 1 + (t - beats[-1]) / last, result)
+        return result
+
+    def seconds_to_beats(self, t: float) -> float:
+        """Секунды → позиция в долях."""
+        return float(self.seconds_to_beats_array([t])[0])
+
+    def beats_to_seconds_array(self, positions: npt.ArrayLike) -> npt.NDArray[np.float64]:
+        """Позиция в долях → секунды для массива позиций."""
+        b = np.asarray(positions, dtype=np.float64)
+        beats = self.beats
+        index = np.arange(len(beats), dtype=np.float64)
+        result = np.interp(b, index, beats)
+        first = float(beats[1] - beats[0])
+        last = float(beats[-1] - beats[-2])
+        result = np.where(b < 0, beats[0] + b * first, result)
+        result = np.where(b > len(beats) - 1, beats[-1] + (b - len(beats) + 1) * last, result)
+        return result
+
+    def beats_to_seconds(self, position: float) -> float:
+        """Позиция в долях → секунды."""
+        return float(self.beats_to_seconds_array([position])[0])
+
+    def local_bpm(self, t: float) -> float:
+        """Темп в окрестности момента `t` — по интервалу, в который он попал."""
+        index = int(np.clip(np.searchsorted(self.beats, t) - 1, 0, len(self.beats) - 2))
+        return 60.0 / float(self.beats[index + 1] - self.beats[index])
+
+    def nearest_grid_point(self, t: float, subdivision: int = 4) -> float:
+        """Ближайший узел сетки.
+
+        Args:
+            t: Момент, секунды.
+            subdivision: Узлов на долю: 4 — шестнадцатые при доле-четверти.
+        """
+        if subdivision < 1:
+            raise ValueError(f"subdivision={subdivision} должен быть положительным")
+        position = round(self.seconds_to_beats(t) * subdivision) / subdivision
+        return self.beats_to_seconds(position)
+
+    def shifted(self, offset: float) -> TempoMap:
+        """Та же сетка, сдвинутая на `offset` секунд.
+
+        Нужна при компенсации рассинхрона: сетку, найденную по звуку,
+        переносят на шкалу времени видео вместе с нотами.
+        """
+        return TempoMap(
+            beats=self.beats + offset,
+            downbeats=self.downbeats + offset,
+            beats_per_bar=self.beats_per_bar,
+            confidence=self.confidence,
+            is_manual=self.is_manual,
+        )
 
 
 @dataclass(frozen=True, slots=True)

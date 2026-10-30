@@ -26,16 +26,40 @@ velocity_gamma = 0.7
 min_note_duration = 0.06  # короче — обрывок блока, а не нота
 
 [audio]
-chunk_seconds = 60.0
-overlap_seconds = 2.0
-onset_threshold = 0.3
+# Нейросетевая транскрипция (#26)
+device = "auto"            # auto: видеокарта, если есть и хватает памяти, иначе процессор
+batch_size = 1             # сегментов по 10 с за проход; на CPU больше 1 только тратит память
+model_path = ""            # пусто: веса скачиваются в кэш при первом запуске
+onset_threshold = 0.3      # пороги постобработки модели ByteDance — значения авторов
 offset_threshold = 0.3
-hop_length = 256           # 16 мс при 16 кГц; librosa по умолчанию даёт 512
+frame_threshold = 0.1
+pedal_offset_threshold = 0.2
+
+# Атаки звука (#28)
+hop_length = 128           # 8 мс при 16 кГц
+onset_n_fft = 1024         # окно 64 мс: вдвое меньше задержка и разброс, чем при 2048
+onset_delta = 0.07         # порог выбора пиков, значение librosa по умолчанию
+onset_wait = 0.03          # атаки ближе 30 мс сливаются в одну
+refine_max_shift = 0.05    # дальше допуска MIREX ноту не двигаем
+chord_window = 0.03        # атаки ближе — один аккорд, а не две ноты подряд
+
+# Темп (#27)
+min_bpm = 40.0
+max_bpm = 220.0
+beat_tightness = 50.0      # 100 у librosa: не успевает за ускорением 90→130 BPM
+beat_match_tolerance = 0.07  # доля «совпала с атакой», если ближе 70 мс
+min_tempo_confidence = 0.5 # ниже — предупредить и предложить задать темп вручную
+tempo_ioi_min_beats = 0.25 # типичная нота не короче шестнадцатой...
+tempo_ioi_max_beats = 1.0  # ...и не длиннее четверти, иначе темп ошибся вдвое
+default_beats_per_bar = 4  # предварительно; размер определяет этап 5 (#33)
 
 [fusion]
 onset_tolerance = 0.08
 max_av_offset = 1.0
 min_offset_confidence = 0.3
+offset_resolution = 0.002  # шаг поиска рассинхрона; пик уточняется параболой
+offset_smoothing = 0.015   # разброс времени атаки в видеоканале — около трети кадра
+min_offset_pairs = 8       # меньше совпавших пар — сдвиг не оценивается
 duration_weight = 0.3
 octave_artifact_ratio = 0.8
 
