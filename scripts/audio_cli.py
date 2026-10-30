@@ -15,7 +15,7 @@ python scripts/audio_cli.py demo
 python scripts/audio_cli.py analyze video.mp4 --clicks beats.wav
 python scripts/audio_cli.py analyze video.mp4 --no-transcribe --seconds 30
 python scripts/audio_cli.py analyze audio.wav --csv notes_audio.csv --truth notes.csv
-python scripts/audio_cli.py sync video.mp4 --video-csv notes_video.csv
+python scripts/audio_cli.py sync video.mp4 --video-csv notes_video.csv --audio-csv notes_audio.csv
 python scripts/audio_cli.py fetch-model
 python scripts/audio_cli.py doctor
 ```
@@ -302,7 +302,14 @@ def command_sync(args: argparse.Namespace) -> int:
         end = args.start + args.seconds if args.seconds else float("inf")
         video_notes = [n for n in video_notes if args.start <= n.onset < end]
 
-    transcribe = not args.no_transcribe and backend_status() is None
+    # Готовые ноты звука из `analyze --csv` избавляют от второго прогона
+    # нейросети: на полном ролике это минуты. Атаки всё равно считаются
+    # заново — это секунды.
+    audio_notes: list[NoteEvent] = []
+    if args.audio_csv:
+        audio_notes = read_notes_csv(Path(args.audio_csv))
+        print(f"ноты звука      : {len(audio_notes)} из {args.audio_csv}")
+    transcribe = not args.audio_csv and not args.no_transcribe and backend_status() is None
     with tempfile.TemporaryDirectory() as tmp:
         audio_path = prepare_audio(video, config, Path(tmp))
         progress = ProgressLine()
@@ -315,25 +322,30 @@ def command_sync(args: argparse.Namespace) -> int:
             progress=progress,
         )
         progress.finish()
+    if transcribe:
+        audio_notes = audio.notes
+    if args.start or args.seconds:
+        end = args.start + args.seconds if args.seconds else float("inf")
+        audio_notes = [n for n in audio_notes if args.start <= n.onset < end]
 
     fusion = config.fusion
     threshold = fusion.min_offset_confidence
     estimates: list[OffsetEstimate] = []
-    if audio.notes:
-        estimates.append(estimate_av_offset(video_notes, audio.notes, fusion))
+    if audio_notes:
+        estimates.append(estimate_av_offset(video_notes, audio_notes, fusion))
     estimates.append(estimate_av_offset_from_onsets(video_notes, audio.onsets, fusion))
     print()
     for estimate in estimates:
         _print_offset(estimate, threshold)
-    if not transcribe:
+    if not audio_notes:
         print("  (без транскрипции: оценка по атакам слабее на ровном ритме)")
 
     best = estimates[0]
-    if args.aligned_csv and not audio.notes:
+    if args.aligned_csv and not audio_notes:
         print("ноты звука не сохранены: без транскрипции их нет")
-    if args.aligned_csv and audio.notes:
+    if args.aligned_csv and audio_notes:
         shift = -best.offset if best.is_reliable(threshold) else 0.0
-        write_notes_csv(apply_offset(audio.notes, shift), Path(args.aligned_csv))
+        write_notes_csv(apply_offset(audio_notes, shift), Path(args.aligned_csv))
         print(f"ноты звука на шкале видео: {args.aligned_csv}")
     return 0
 
@@ -496,6 +508,7 @@ def build_parser() -> argparse.ArgumentParser:
     sync = sub.add_parser("sync", help="рассинхрон звука и картинки")
     sync.add_argument("video")
     sync.add_argument("--video-csv", help="ноты видео из vision_cli analyze --csv")
+    sync.add_argument("--audio-csv", help="ноты звука из audio_cli analyze --csv")
     sync.add_argument("--no-transcribe", action="store_true", help="оценка только по атакам")
     sync.add_argument("--start", type=float, default=0.0)
     sync.add_argument("--seconds", type=float)

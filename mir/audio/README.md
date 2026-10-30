@@ -157,7 +157,7 @@ run audio demo
 run audio analyze video.mp4 --no-transcribe --clicks beats.wav
 run audio-setup                         один раз: PyTorch и веса модели
 run audio analyze video.mp4 --csv audio_notes.csv
-run audio sync video.mp4 --video-csv video_notes.csv
+run audio sync video.mp4 --video-csv video_notes.csv --audio-csv audio_notes.csv
 ```
 
 Подробности ключей — в `scripts/README.md`.

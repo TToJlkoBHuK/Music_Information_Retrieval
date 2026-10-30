@@ -269,7 +269,7 @@ run audio analyze video.mp4 --seconds 30 --csv audio_notes.csv
 
 ```bash
 run analyze video.mp4 --csv video_notes.csv
-run audio sync video.mp4 --video-csv video_notes.csv
+run audio sync video.mp4 --video-csv video_notes.csv --audio-csv audio_notes.csv
 ```
 
 ## Проверка качества кода

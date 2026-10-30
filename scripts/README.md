@@ -117,10 +117,10 @@ run audio analyze audio.wav --truth notes.csv --min-f1 0.8
 
 ```
 run analyze video.mp4 --csv video_notes.csv
-run audio sync video.mp4 --video-csv video_notes.csv --aligned-csv audio_aligned.csv
+run audio sync video.mp4 --video-csv video_notes.csv --audio-csv audio_notes.csv --aligned-csv audio_aligned.csv
 ```
 
-Печатает сдвиг, уверенность и решение — применяется он или нет. Без `--video-csv` видеоряд разбирается заново. Без нейросети оценка идёт только по атакам и на ровном ритме честно отказывается.
+Печатает сдвиг, уверенность и решение — применяется он или нет. Без `--video-csv` видеоряд разбирается заново, без `--audio-csv` — заново гоняется нейросеть; на полном ролике это минуты, поэтому лучше передать CSV из предыдущих команд. Без нейросети оценка идёт только по атакам и на ровном ритме честно отказывается.
 
 ### Нейросеть
 
