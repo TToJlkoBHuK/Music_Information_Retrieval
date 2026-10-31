@@ -450,9 +450,24 @@ def command_compare(args: argparse.Namespace) -> int:
     """Сверить ноты видео и звука без эталона."""
     from mir.eval import compare_channels
 
-    video = read_notes_csv(Path(args.video_csv))
-    audio = read_notes_csv(Path(args.audio_csv))
+    video_all = read_notes_csv(Path(args.video_csv))
+    audio_all = read_notes_csv(Path(args.audio_csv))
+    if not video_all or not audio_all:
+        print("сравнивать нечего: один из файлов пуст")
+        return 1
+    # Сравнивается только общий отрезок: видео часто разобрано с --seconds,
+    # а звук целиком, и лишние ноты одного канала занизили бы совпадение.
+    start = max(args.start, min(n.onset for n in video_all), min(n.onset for n in audio_all))
+    end = min(max(n.offset for n in video_all), max(n.offset for n in audio_all))
+    if args.end is not None:
+        end = min(end, args.end)
+    video = [n for n in video_all if start <= n.onset < end]
+    audio = [n for n in audio_all if start <= n.onset < end]
+    print(f"окно сравнения  : {start:.1f}–{end:.1f} с (общий отрезок обоих каналов)")
     print(f"нот             : видео {len(video)}, звук {len(audio)}")
+    if not video or not audio:
+        print("в общем отрезке нот нет")
+        return 1
 
     result = compare_channels(video, audio)
     if abs(result.time_shift) >= 0.95:
@@ -472,9 +487,26 @@ def command_compare(args: argparse.Namespace) -> int:
     print("  (ориентир: 1.0 — валики совпадают полностью; у верных каналов")
     print("   длительности расходятся из-за педали, поэтому заметно меньше 1)")
 
+    # По началам нот: педаль на них не влияет, поэтому оценка строже валиков.
+    # Звук здесь вместо эталона — его ошибки тоже войдут в счёт.
+    estimate = estimate_av_offset(video, audio, load_config().fusion)
+    shifted = [
+        replace(n, onset=n.onset + estimate.offset, offset=n.offset + estimate.offset)
+        for n in video
+    ]
+    score = evaluate(audio, shifted)
+    print(
+        f"по началам нот  : совпало {score.matched} (видео {len(video)}, звук {len(audio)}), "
+        f"P {score.precision:.3f} R {score.recall:.3f} F1 {score.f1:.3f}"
+    )
+    print(
+        f"  после сдвига видео на {estimate.offset_ms:+.0f} мс "
+        f"(уверенность {estimate.confidence:.2f}); "
+        f"средняя ошибка начала {score.onset_error_avg * 1000:.1f} мс"
+    )
+
     if args.roll:
-        end = args.end or max((n.offset for n in [*video, *audio]), default=0.0)
-        draw_two_rolls(video, audio, args.start, end, Path(args.roll))
+        draw_two_rolls(video, audio, start, end, Path(args.roll))
     return 0
 
 
@@ -629,8 +661,8 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--video-csv", required=True, help="ноты из run analyze --csv")
     compare.add_argument("--audio-csv", required=True, help="ноты из run audio analyze --csv")
     compare.add_argument("--roll", help="картинка: оба валика на одной оси")
-    compare.add_argument("--start", type=float, default=0.0, help="начало окна картинки, с")
-    compare.add_argument("--end", type=float, help="конец окна картинки, с")
+    compare.add_argument("--start", type=float, default=0.0, help="начало окна сравнения, с")
+    compare.add_argument("--end", type=float, help="конец окна сравнения, с")
     compare.set_defaults(func=command_compare)
 
     demo = sub.add_parser("demo", help="синтетика с известным ответом")

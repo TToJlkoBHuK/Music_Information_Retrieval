@@ -1,32 +1,35 @@
 """Разбор видеоряда целиком — точка входа этапа `vision`.
 
-Внутри видеоканала два независимых источника сведений, и они дополняют
-друг друга:
+Внутри видеоканала два источника нот:
 
-* **подсветка клавиш** даёт точные моменты начала и конца звучания;
-* **падающие блоки** дают партию руки и видны заранее.
+* **падающие блоки** — линия-датчик над клавиатурой (`line_sensor`). Блоки
+  падают выше клавиатуры, и руки исполнителя их не закрывают;
+* **подсветка клавиш** (`key_tracker`) — для визуализаторов без блоков.
 
-Оба обходят ролик за один проход, после чего результаты сводятся:
-время берётся от подсветки, рука — от блоков.
+Основной источник — блоки. На самых популярных роликах, где поверх
+нарисованной клавиатуры сняты настоящие руки, подсветка непригодна:
+руку трекер принимает за нажатие (`docs/known-issues.md`, В-05). Подсветка
+остаётся запасным путём, когда блоков в ролике нет.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from itertools import pairwise
 from pathlib import Path
 
 import cv2
 import numpy as np
 
-from mir.common.enums import Hand, Stage
+from mir.common.enums import Stage
 from mir.common.errors import KeyboardNotFoundError
 from mir.common.logging import get_logger
 from mir.common.types import Frame, KeyboardLayout, MediaBundle, NoteEvent, ProgressCallback
 from mir.config import MirConfig, load_config
-from mir.vision.block_tracker import BlockTracker
 from mir.vision.calibration import VisualizerProfile, calibrate
 from mir.vision.key_tracker import KeyTracker
 from mir.vision.keyboard_detector import KeyboardDetector, build_median_frame
+from mir.vision.line_sensor import LineSensor, SensorReport
 
 __all__ = ["VisionResult", "analyze_video"]
 
@@ -41,8 +44,12 @@ _CALIBRATION_AT = 0.4
 Не в начале: там заставка, где блоки не движутся вовсе.
 """
 
-_HAND_MATCH_TOLERANCE = 0.12
-"""Допуск сопоставления событий подсветки и блоков, секунды."""
+_MIN_SENSOR_NOTES = 8
+"""Меньше нот от датчика блоков — считать, что блоков в ролике нет.
+
+Несколько случайных событий даёт и ролик без блоков: титры, вспышки.
+Музыкальный фрагмент даже в полминуты содержит десятки нот.
+"""
 
 
 @dataclass
@@ -56,7 +63,9 @@ class VisionResult:
         frames_processed: Сколько кадров прочитано.
         elapsed_sec: Время обработки — идёт в таблицы производительности.
         notes_from_keys: Событий от подсветки клавиш.
-        notes_from_blocks: Событий от падающих блоков.
+        notes_from_blocks: Нот от падающих блоков (линия-датчик).
+        source: Какой источник дал итоговые ноты: `blocks` или `keys`.
+        sensor: Подробности линии-датчика: скорость падения, линия касания.
     """
 
     notes: list[NoteEvent]
@@ -66,6 +75,8 @@ class VisionResult:
     elapsed_sec: float = 0.0
     notes_from_keys: int = 0
     notes_from_blocks: int = 0
+    source: str = "keys"
+    sensor: SensorReport | None = None
     warnings: list[str] = field(default_factory=list)
 
 
@@ -113,45 +124,6 @@ def _consecutive_frames(capture: cv2.VideoCapture, start: int, count: int) -> li
     return frames
 
 
-def _merge_hands(key_notes: list[NoteEvent], block_notes: list[NoteEvent]) -> list[NoteEvent]:
-    """Перенести партию руки с блоков на события подсветки.
-
-    Время берётся от подсветки: она даёт момент нажатия напрямую, тогда как
-    у блоков он вычисляется интерполяцией и накапливает ошибку скорости
-    падения. Рука есть только у блоков — цвет подсветки её не кодирует.
-    """
-    if not block_notes:
-        return key_notes
-
-    by_pitch: dict[int, list[NoteEvent]] = {}
-    for note in block_notes:
-        by_pitch.setdefault(note.pitch, []).append(note)
-
-    merged: list[NoteEvent] = []
-    for note in key_notes:
-        candidates = by_pitch.get(note.pitch, [])
-        nearest = min(
-            (c for c in candidates if abs(c.onset - note.onset) < _HAND_MATCH_TOLERANCE),
-            key=lambda c: abs(c.onset - note.onset),
-            default=None,
-        )
-        if nearest is None or nearest.hand is Hand.UNKNOWN:
-            merged.append(note)
-        else:
-            merged.append(
-                NoteEvent(
-                    pitch=note.pitch,
-                    onset=note.onset,
-                    offset=note.offset,
-                    velocity=note.velocity,
-                    hand=nearest.hand,
-                    source=note.source,
-                    confidence=min(1.0, note.confidence * 1.1),
-                )
-            )
-    return merged
-
-
 _SPAN_PROBE_STEP = 0.5
 """Шаг сканирования при поиске границ фрагмента с клавиатурой, секунды."""
 
@@ -161,12 +133,25 @@ _SPAN_SEARCH_SHARE = 0.3
 Заставка длиннее трети ролика — это уже не заставка.
 """
 
-_SPAN_SIMILARITY = 0.5
+_SPAN_SIMILARITY = 0.3
 """Насколько профиль стыков должен совпасть с эталонным.
 
 У кадра с клавиатурой совпадение около единицы даже при яркой подсветке:
 она меняет яркость клавиш, но не положение стыков. У заставки с обложкой
 регулярного узора нет вовсе, и совпадение падает к нулю.
+
+Порог был 0.5, но руки исполнителя закрывают часть клавиатуры: на
+синтетике с руками кадры с клавиатурой давали 0.48, и разбор начинался
+позже первой ноты. Замер на ролике Rousseau: заставка 0.00–0.02, переход
+0.71, игра 0.95–0.97. Порог 0.3 лежит с запасом между ними.
+"""
+
+_SPAN_SEGMENTS = 8
+"""На сколько участков делить клавиатуру при сравнении профилей.
+
+Совпадение считается по каждому участку отдельно, и берётся медиана. Рука
+портит два-три участка из восьми, а медиана этого не замечает; общая
+корреляция по всей ширине падала вдвое от одной ладони.
 """
 
 
@@ -187,12 +172,24 @@ def _keyboard_signature(frame: Frame, layout: KeyboardLayout) -> Frame:
     return centered
 
 
-def _similarity(first: Frame, second: Frame) -> float:
+def _correlation(first: Frame, second: Frame) -> float:
     """Нормированная корреляция двух профилей, 0..1."""
+    first = first - first.mean()
+    second = second - second.mean()
     norm = float(np.linalg.norm(first) * np.linalg.norm(second))
     if norm <= 0:
         return 0.0
     return max(0.0, float(np.dot(first, second) / norm))
+
+
+def _similarity(first: Frame, second: Frame) -> float:
+    """Совпадение профилей стыков: медиана корреляций по участкам, 0..1."""
+    size = min(len(first), len(second))
+    if size < _SPAN_SEGMENTS:
+        return _correlation(first[:size], second[:size])
+    bounds = np.linspace(0, size, _SPAN_SEGMENTS + 1).astype(int)
+    scores = [_correlation(first[a:b], second[a:b]) for a, b in pairwise(bounds)]
+    return float(np.median(scores))
 
 
 def find_keyboard_span(
@@ -339,7 +336,7 @@ def analyze_video(
         )
 
         key_tracker = KeyTracker(layout, reference, config.vision.tracker)
-        block_tracker = BlockTracker(layout, profile, media.fps, config.vision.tracker)
+        sensor = LineSensor(layout, sample, media.fps, config.vision.sensor)
 
         span_start, span_end = find_keyboard_span(
             capture, layout, reference, media.fps, media.frame_count
@@ -364,24 +361,34 @@ def analyze_video(
                 break
             timestamp = index / media.fps
             key_notes.extend(key_tracker.process_frame(frame, timestamp))
-            block_tracker.process_frame(frame, timestamp)
+            sensor.process_frame(frame, timestamp)
             index += 1
             if progress and index % 30 == 0:
                 progress(Stage.VISION, min((index - first) / total, 1.0))
 
         key_notes.extend(key_tracker.flush(index / media.fps))
-        block_notes = block_tracker.flush()
+        block_notes = sensor.finish()
     finally:
         capture.release()
 
-    notes = sorted(_merge_hands(key_notes, block_notes), key=lambda n: (n.onset, n.pitch))
+    warnings = list(profile.warnings)
+    if len(block_notes) >= _MIN_SENSOR_NOTES:
+        source, notes = "blocks", block_notes
+        # Скорость падения датчик измерил сам, по задержке между полосами.
+        warnings = [w for w in warnings if "скорость падения" not in w]
+    else:
+        source, notes = "keys", key_notes
+        reason = sensor.report.reason or f"по блокам нашлось лишь {len(block_notes)} нот"
+        warnings.append(f"ноты взяты с подсветки клавиш: {reason}")
+    notes = sorted(notes, key=lambda n: (n.onset, n.pitch))
     elapsed = time.perf_counter() - started
 
     _log.info(
-        "видеоряд разобран: %d кадров за %.1f с, нот %d (подсветка %d, блоки %d)",
+        "видеоряд разобран: %d кадров за %.1f с, нот %d (источник %s; подсветка %d, блоки %d)",
         index,
         elapsed,
         len(notes),
+        source,
         len(key_notes),
         len(block_notes),
     )
@@ -397,7 +404,9 @@ def analyze_video(
         elapsed_sec=elapsed,
         notes_from_keys=len(key_notes),
         notes_from_blocks=len(block_notes),
-        warnings=list(profile.warnings),
+        source=source,
+        sensor=sensor.report,
+        warnings=warnings,
     )
 
 

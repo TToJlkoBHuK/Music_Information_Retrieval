@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from collections import Counter
 from pathlib import Path
 
 try:
@@ -187,16 +188,29 @@ def print_result(result: VisionResult) -> None:
         f"клавиш {len(layout.keys)}, уверенность {layout.confidence:.2f}"
         f"{', обрезана' if layout.is_cropped else ''}"
     )
-    print(f"линия касания   : y={profile.hit_line_y}")
-    print(f"скорость падения: {profile.fall_speed:.0f} px/с")
+    sensor = result.sensor
+    if sensor is not None and sensor.enabled:
+        # Датчик меряет по самим блокам — точнее калибровки по выборке кадров.
+        print(f"линия касания   : y={sensor.contact_y:.0f}")
+        print(f"скорость падения: {sensor.fall_speed:.0f} px/с")
+    else:
+        print(f"линия касания   : y={profile.hit_line_y} (оценка калибровки)")
+        print(f"скорость падения: {profile.fall_speed:.0f} px/с (оценка калибровки)")
+    source = "блоки над клавиатурой" if result.source == "blocks" else "подсветка клавиш"
     print(
-        f"цветов блоков   : {len(profile.block_colors_hsv)}"
-        f"{' (руки различимы)' if profile.has_hand_colors else ' (руки неразличимы)'}"
-    )
-    print(
-        f"нот найдено     : {len(result.notes)} "
+        f"нот найдено     : {len(result.notes)}, источник — {source} "
         f"(подсветка {result.notes_from_keys}, блоки {result.notes_from_blocks})"
     )
+    if sensor is not None and sensor.enabled:
+        print(f"  отсеяно дыма, искр и прочего: {sensor.rejected}")
+    hands = Counter(note.hand for note in result.notes)
+    if hands[Hand.UNKNOWN] == len(result.notes):
+        print("руки           : не различаются по цвету — разделит этап нотации")
+    else:
+        print(
+            f"руки           : правая {hands[Hand.RIGHT]}, левая {hands[Hand.LEFT]}, "
+            f"неизвестно {hands[Hand.UNKNOWN]}"
+        )
     for warning in result.warnings:
         print(f"  предупреждение: {warning}")
 

@@ -1,0 +1,153 @@
+"""Линия-датчик: ноты по падающим блокам.
+
+Кадры рисуются прямо в памяти, без кодирования видео: так проверяется сама
+логика датчика — скорость, линия касания, отсев дыма и неподвижного, —
+и тест идёт доли секунды.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import numpy.typing as npt
+import pytest
+
+from mir.config import SensorConfig
+from mir.vision.keyboard_geometry import KeyboardGeometry
+from mir.vision.line_sensor import LineSensor, _hue_groups
+
+WIDTH, HEIGHT = 640, 400
+TOP = 300  # верх клавиатуры
+CONTACT = 290  # линия касания на 10 пикселей выше — как планка у Rousseau
+FPS = 30.0
+SPEED = 200.0
+BACKGROUND = (20, 18, 15)
+BLOCK = (240, 240, 240)
+
+GEOMETRY = KeyboardGeometry(x=0, width=WIDTH, lowest_pitch=48, highest_pitch=72)
+LAYOUT = GEOMETRY.build_layout(y=TOP, height=HEIGHT - TOP)
+
+
+def blank() -> npt.NDArray[np.uint8]:
+    frame = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+    frame[:] = BACKGROUND
+    frame[TOP:] = (230, 230, 230)
+    return frame
+
+
+def draw_block(frame: npt.NDArray[np.uint8], pitch: int, onset: float, offset: float, t: float):
+    bottom = CONTACT - (onset - t) * SPEED
+    top = bottom - (offset - onset) * SPEED
+    y0, y1 = int(max(top, 0)), int(min(bottom, CONTACT))
+    if y1 > y0:
+        left, right = GEOMETRY.bounds(pitch)
+        frame[y0:y1, int(left) + 1 : int(right) - 1] = BLOCK
+
+
+def run(
+    notes: list[tuple[int, float, float]],
+    seconds: float,
+    extra=None,
+    start: float = 0.0,
+):
+    """Прогнать датчик по ролику из блоков; `extra(frame, t)` дорисовывает помехи."""
+    times = np.arange(start, seconds, 1 / FPS)
+    frames = []
+    for t in times:
+        frame = blank()
+        for pitch, onset, offset in notes:
+            draw_block(frame, pitch, onset, offset, t)
+        if extra is not None:
+            extra(frame, t)
+        frames.append(frame)
+    sample = frames[:: max(len(frames) // 60, 1)]
+    sensor = LineSensor(LAYOUT, sample, FPS, SensorConfig())
+    for t, frame in zip(times, frames, strict=True):
+        sensor.process_frame(frame, float(t))
+    return sensor.finish(), sensor
+
+
+def melody(jitter: float = 0.0) -> list[tuple[int, float, float]]:
+    """13 нот; `jitter` сдвигает каждую следующую на долю кадра."""
+    pitches = [60, 62, 64, 65, 67, 69, 71, 72, 48, 52, 55, 61, 63]
+    return [
+        (p, 1.5 + i * (0.4 + jitter), 1.5 + i * (0.4 + jitter) + 0.3) for i, p in enumerate(pitches)
+    ]
+
+
+@pytest.mark.parametrize("jitter", [0.0, 0.013])
+def test_notes_found_with_subframe_timing(jitter):
+    """Без сдвига все ноты в одной фазе кадра, со сдвигом — в разных."""
+    truth = melody(jitter)
+    notes, _ = run(truth, 9.0)
+
+    assert [n.pitch for n in notes] == [p for p, _, _ in truth]
+    errors = [abs(n.onset - onset) for n, (_, onset, _) in zip(notes, truth, strict=True)]
+    assert max(errors) < 0.5 / FPS  # точнее полукадра
+    durations = [abs(n.duration - (off - on)) for n, (_, on, off) in zip(notes, truth, strict=True)]
+    assert max(durations) < 1 / FPS
+
+
+def test_speed_and_contact_measured():
+    _, sensor = run(melody(), 8.0)
+    assert sensor.report.fall_speed == pytest.approx(SPEED, rel=0.03)
+    assert sensor.report.contact_y == pytest.approx(CONTACT, abs=2)
+
+
+def test_rising_smoke_is_rejected():
+    """Дым поднимается от места касания: в нижней полосе раньше, чем в верхней."""
+
+    def smoke(frame, t):
+        if 2.0 <= t < 4.0:
+            bottom = CONTACT - (t - 2.0) * 120  # поднимается
+            left, right = GEOMETRY.bounds(71)  # клавиша, на которой нот нет
+            frame[int(bottom) - 60 : int(bottom), int(left) : int(right)] = (200, 200, 210)
+
+    truth = melody()[:6]  # настоящие ноты нужны, чтобы измерить скорость
+    notes, sensor = run(truth, 6.0, extra=smoke)
+    assert [n.pitch for n in notes] == [p for p, _, _ in truth]
+    assert sensor.report.rejected >= 1
+
+
+def test_static_overlay_is_rejected():
+    """Неподвижная полоса стоит в обеих полосах сразу: покрытие есть, сдвига нет."""
+
+    def beam(frame, t):
+        if 3.0 <= t < 5.0:
+            left, right = GEOMETRY.bounds(69)
+            frame[40:CONTACT, int(left) : int(right)] = (235, 235, 235)
+
+    notes, _ = run(melody()[:5], 6.0, extra=beam)
+    assert 69 not in [n.pitch for n in notes]
+
+
+def test_block_already_in_flight_at_start():
+    """Разбор начался после заставки, а блок первой ноты уже падает."""
+    notes, _ = run([(60, 0.3, 0.9), *melody()], 8.0, start=0.0)
+    first = notes[0]
+    assert first.pitch == 60
+    assert first.onset == pytest.approx(0.3, abs=1 / FPS)
+
+
+def test_disabled_without_blocks():
+    """Визуализатор без блоков: датчик честно выключается, а не выдумывает ноты."""
+    notes, sensor = run([], 4.0)
+    assert notes == []
+    assert not sensor.enabled
+    assert "нет блоков" in sensor.report.reason
+
+
+def test_hue_groups_split_two_colours_across_red():
+    """Два цвета, один из них — красный по обе стороны нуля шкалы оттенков."""
+    hues = np.array([178.0, 2.0, 1.0, 179.0, 60.0, 61.0, 59.0])
+    groups = _hue_groups(hues)
+    assert groups is not None
+    assert list(groups) == [groups[0]] * 4 + [not groups[0]] * 3
+
+
+def test_hue_groups_single_colour_with_outlier():
+    """Один цвет и пара искр другого оттенка — руки не различаются."""
+    assert (
+        _hue_groups(np.array([90.0, 91.0, 92.0, 93.0, 94.0, 95.0, 97.0, 91.0, 92.0, 93.0])) is None
+    )
+    hues = np.array([90.0] * 20 + [30.0])  # одна нота из двадцати одной: выброс
+    assert _hue_groups(hues) is None

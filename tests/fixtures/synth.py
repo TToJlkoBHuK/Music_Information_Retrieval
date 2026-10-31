@@ -78,6 +78,10 @@ class SynthConfig:
         glow: Рисовать свечение вокруг блоков.
         noise_sigma: Гауссов шум, имитация артефактов сжатия.
         watermark: Текст поверх кадра.
+        hands: Рисовать руки исполнителя поверх клавиатуры — как у Rousseau
+            и других роликов, где под визуализацию подложена съёмка игры.
+        blocks: Рисовать падающие блоки. Без них остаётся визуализатор
+            с одной подсветкой клавиш.
     """
 
     width: int = 1280
@@ -93,6 +97,8 @@ class SynthConfig:
     watermark: str | None = None
     intro_seconds: float = 0.0
     outro_seconds: float = 0.0
+    hands: bool = False
+    blocks: bool = True
 
     @property
     def keyboard_top(self) -> int:
@@ -182,6 +188,49 @@ def _draw_blocks(frame: Frame, config: SynthConfig, notes: list[NoteEvent], t: f
         cv2.rectangle(frame, (int(left), y0), (int(right) - 1, y1), colour, -1)
 
 
+_SKIN_BGR = (120, 150, 200)
+_SKIN_SHADOW_BGR = (70, 85, 115)
+
+
+def _draw_hands(frame: Frame, config: SynthConfig, notes: list[NoteEvent], t: float) -> None:
+    """Нарисовать руки исполнителя поверх клавиатуры.
+
+    Ладонь лежит на нижней части клавиш, пальцы тянутся к их верху, но
+    за линию касания не заходят — как на настоящих роликах. Рука держится
+    над звучащими нотами своей партии и плавно перемещается, когда их нет.
+    Ладонь сдвинута от пальцев к краю клавиатуры: на ролике Rousseau именно
+    под ладонью левой руки трекер подсветки находил ноты на кварту ниже.
+    """
+    geom = config.geometry()
+    top, height = config.keyboard_top, config.keyboard_height
+    white = config.width / len(geom.white_pitches)
+    for hand, phase, side in ((Hand.LEFT, 0.0, -1.0), (Hand.RIGHT, 1.7, 1.0)):
+        sounding = [
+            sum(geom.bounds(n.pitch)) / 2
+            for n in notes
+            if n.onset - 0.3 <= t < n.offset
+            and (n.hand is hand or (n.hand is Hand.UNKNOWN and (n.pitch < 60) == (side < 0)))
+        ]
+        if sounding:
+            center = float(np.mean(sounding))
+        else:
+            center = config.width * (0.5 + 0.2 * side) + 3 * white * np.sin(0.7 * t + phase)
+        palm = (int(center + side * 1.5 * white), int(top + 0.8 * height))
+        cv2.ellipse(
+            frame, palm, (int(3.2 * white), int(0.35 * height)), 0, 0, 360, _SKIN_SHADOW_BGR, -1
+        )
+        cv2.ellipse(frame, palm, (int(2.8 * white), int(0.3 * height)), 0, 0, 360, _SKIN_BGR, -1)
+        for finger in range(-2, 3):
+            x = int(center + finger * 0.9 * white)
+            cv2.rectangle(
+                frame,
+                (x - int(0.25 * white), top + 4 + abs(finger) * 6),
+                (x + int(0.25 * white), int(top + 0.75 * height)),
+                _SKIN_BGR,
+                -1,
+            )
+
+
 def _draw_title_card(frame: Frame, config: SynthConfig) -> None:
     """Нарисовать заставку: обложка и название вместо клавиатуры.
 
@@ -266,10 +315,13 @@ def render_visualizer_video(
                 writer.write(frame)
                 continue
 
-            _draw_blocks(frame, config, notes, t)
+            if config.blocks:
+                _draw_blocks(frame, config, notes, t)
 
             active = {n.pitch: n.hand for n in notes if n.onset <= t < n.offset}
             _draw_keyboard(frame, config, active)
+            if config.hands:
+                _draw_hands(frame, config, notes, t)
 
             cv2.line(
                 frame,

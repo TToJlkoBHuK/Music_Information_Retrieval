@@ -35,6 +35,7 @@ __all__ = [
     "IngestConfig",
     "MirConfig",
     "NotationConfig",
+    "SensorConfig",
     "VisionConfig",
     "load_config",
 ]
@@ -102,11 +103,31 @@ class TrackerConfig:
 
 
 @dataclass(frozen=True)
+class SensorConfig:
+    """Линия-датчик над клавиатурой: ноты по падающим блокам.
+
+    Положения полос — доли расстояния от верха кадра до клавиатуры: так они
+    не зависят ни от разрешения, ни от того, где визуализатор рисует
+    клавиатуру.
+    """
+
+    high_offset: float = 0.37
+    low_offset: float = 0.20
+    band_height: float = 0.01
+    solid_level: float = 0.6
+    min_block_width: float = 0.4
+    confirm_coverage: float = 0.5
+    min_block_contrast: float = 40.0
+    max_delay: float = 2.0
+
+
+@dataclass(frozen=True)
 class VisionConfig:
     """Параметры анализа видеоряда."""
 
     keyboard: KeyboardConfig = field(default_factory=KeyboardConfig)
     tracker: TrackerConfig = field(default_factory=TrackerConfig)
+    sensor: SensorConfig = field(default_factory=SensorConfig)
 
 
 @dataclass(frozen=True)
@@ -277,6 +298,23 @@ def _env_overrides() -> dict[str, Any]:
     return out
 
 
+def _validate_sensor(sensor: SensorConfig) -> list[str]:
+    problems: list[str] = []
+    if not 0 < sensor.low_offset < sensor.high_offset < 1:
+        problems.append(
+            "vision.sensor: нужно 0 < low_offset < high_offset < 1 — нижняя полоса "
+            "ближе к клавиатуре, чем верхняя"
+        )
+    if not 0 < sensor.band_height < 0.1:
+        problems.append("vision.sensor.band_height: доля высоты кадра от 0 до 0.1")
+    for name in ("solid_level", "confirm_coverage"):
+        if not 0 < getattr(sensor, name) <= 1:
+            problems.append(f"vision.sensor.{name} должен лежать в диапазоне (0, 1]")
+    if sensor.min_block_width <= 0 or sensor.max_delay <= 0:
+        problems.append("vision.sensor: min_block_width и max_delay должны быть положительными")
+    return problems
+
+
 def _validate_audio(audio: AudioConfig) -> list[str]:
     problems: list[str] = []
     if audio.device not in ("auto", "cpu", "cuda"):
@@ -343,6 +381,7 @@ def validate(config: MirConfig) -> list[str]:
             "vision.tracker.off_threshold должен быть меньше on_threshold, "
             "иначе гистерезис не работает и подсветка будет дребезжать"
         )
+    problems.extend(_validate_sensor(config.vision.sensor))
     problems.extend(_validate_audio(config.audio))
     problems.extend(_validate_fusion(config.fusion))
     if not 0.0 <= config.notation.quantize_strength <= 1.0:

@@ -172,6 +172,38 @@ def test_result_reports_backend_and_counts(clean_video: Path):
     assert result.notes_from_blocks > 0
 
 
+def test_hands_over_keyboard_do_not_break_notes(tmp_path: Path, melody: list[NoteEvent]):
+    """Руки исполнителя поверх клавиш — как в большинстве роликов (В-05).
+
+    Подсветка клавиш под ладонями и пальцами ломается: тени и цвет кожи
+    дают ложные нажатия. Ноты берутся с блоков над клавиатурой, где рук нет.
+    """
+    video = render_visualizer_video(melody, tmp_path / "hands.mp4", SynthConfig(hands=True))
+
+    result = analyze_file(video)
+    score = evaluate(melody, result.notes)
+    print("\n" + score.format_report("руки поверх клавиатуры"))
+    print(f"подсветка клавиш дала бы {result.notes_from_keys} нот при {len(melody)} в эталоне")
+
+    assert result.source == "blocks"
+    assert score.f1 == pytest.approx(1.0)
+    assert score.onset_error_max < 0.05
+    assert score.hand_accuracy == pytest.approx(1.0)
+
+
+def test_without_blocks_falls_back_to_keys(tmp_path: Path, melody: list[NoteEvent]):
+    """Визуализатор только с подсветкой клавиш: датчик выключается, ноты с клавиш."""
+    video = render_visualizer_video(melody, tmp_path / "keys.mp4", SynthConfig(blocks=False))
+
+    result = analyze_file(video)
+    score = evaluate(melody, result.notes)
+
+    assert result.source == "keys"
+    assert result.sensor is not None and not result.sensor.enabled
+    assert any("подсветки клавиш" in w for w in result.warnings)
+    assert score.f1 > 0.9
+
+
 def test_intro_is_skipped_automatically(tmp_path: Path, melody: list[NoteEvent]):
     """Заставка в начале ролика не должна требовать ручного ключа.
 
