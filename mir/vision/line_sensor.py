@@ -420,8 +420,10 @@ class LineSensor:
         solid = self._solid_keys(deviation, band.level)
         first = self._frames == 0
 
-        for key in np.flatnonzero(solid):
-            index = int(key)
+        # Номера из numpy приводятся к int сразу: ниже по ним индексируется
+        # словарь, а у numpy ≥ 2.3 это другой тип (mypy на Python 3.12).
+        for found in np.flatnonzero(solid):
+            index = int(found)
             active = band.active.get(index)
             if active is not None:
                 active.pending = None  # блок не пропадал: был кадр с искрой

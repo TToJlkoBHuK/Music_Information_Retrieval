@@ -46,6 +46,9 @@ transcription = [
     "torch>=2.0",
     "piano_transcription_inference>=0.0.6",
     "torchlibrosa>=0.1.0",
+    # Библиотека ByteDance импортирует audioread, но не объявляет его:
+    # раньше его тянул librosa, а с librosa 0.11 он необязателен.
+    "audioread>=2.1",
 ]
 docs = [
     "mkdocs-material>=9.5",

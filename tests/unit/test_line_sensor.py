@@ -66,7 +66,7 @@ def render(
     for t in times:
         frame = blank()
         for pitch, onset, offset in notes:
-            draw_block(frame, pitch, onset, offset, t, colour)
+            draw_block(frame, pitch, onset, offset, float(t), colour)
         for paint in painters:
             paint(frame, t)
         frames.append(frame)
@@ -175,7 +175,7 @@ def test_hue_groups_single_colour_with_outlier():
     assert _hue_groups(hues) is None
 
 
-def _found(hands_by_time: bool) -> list:
+def _found(hands_by_time: bool) -> list[tuple[NoteEvent, npt.NDArray[np.float64]]]:
     """Ноты двух цветов: вперемешку (руки) или первая половина одним цветом (смена палитры)."""
     green, blue = np.array([80.0, 200.0, 80.0]), np.array([220.0, 140.0, 60.0])
     found = []
