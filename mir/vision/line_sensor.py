@@ -87,6 +87,19 @@ _MIN_HAND_HUE_GAP = 20.0
 _MIN_HAND_SHARE = 0.1
 """Группа меньше этой доли нот — выбросы (искры другого цвета), а не рука."""
 
+_MIN_HAND_MIXING = 0.1
+"""Насколько цвета должны перемешиваться во времени, чтобы быть руками.
+
+Руки играют одновременно, и по ходу ролика цвета нот чередуются постоянно.
+Число смен цвета в последовательности нот сравнивается с ожидаемым при
+случайном порядке (критерий серий Вальда — Вольфовица). Замеры: у Rousseau,
+Clair de lune, палитра сменилась с синей на фиолетовую на 151-й секунде —
+отношение 0.003; у синтетики, где руки играют вместе, — больше 1. Порог 0.1
+пропускает и пьесы, где руки подолгу играют по очереди (до 20 нот одной
+рукой подряд). Ролика, где руки действительно окрашены по-разному, в
+проверке пока не было — сверить на #13.
+"""
+
 _BACKGROUND_ROWS = 32
 """По сколько строк считать фон: около 50 МБ памяти на часть при 1080p."""
 
@@ -566,13 +579,19 @@ class LineSensor:
             start, end = event.start(speed), event.end(speed)
             candidates = low_by_key.get(event.key, [])
             share = covered(event.key, start + delay, end + delay)
-            match = self._match(event, candidates, delay, tolerance, speed)
+            # Дым от прошлой ноты нередко уже стоит в нижней полосе, когда туда
+            # входит блок: они сливаются, и начало в нижней полосе выходит
+            # раньше ожидаемого. На «Лунной сонате» так терялись настоящие ноты
+            # с опережением в 2–3 кадра. Поэтому раньше срока допускается до
+            # половины задержки: неподвижное (обе полосы сразу) и поднимающийся
+            # дым (нижняя раньше верхней) по-прежнему не проходят.
+            early = max(tolerance, delay / 2)
+            match = self._match(event, candidates, delay, (early, tolerance), speed)
             # Блок обязан дойти до нижней полосы (доля покрытия) и пройти её
             # со сдвигом на задержку — войти или выйти. Второе условие
             # отсекает неподвижное: световой луч или полосу заставки, которые
             # стоят в обеих полосах сразу, — покрытие у них полное, а сдвига
-            # нет. Достаточно одного из краёв: дым от прошлой ноты нередко
-            # сливается с блоком на входе, и начало в нижней полосе смещается.
+            # нет. Достаточно одного из краёв.
             shifted = match is not None or any(
                 abs(c.end(speed) - (end + delay)) <= tolerance for c in candidates
             )
@@ -583,9 +602,14 @@ class LineSensor:
             offsets = [end + lead_high]
             if match is not None:
                 used.add(id(match))
-                if not match.clipped and (event.clipped or match.measured(speed)):
+                # Во время берутся только края нижней полосы, согласные с
+                # верхней: слившийся с блоком дым сдвигает их — начало раньше,
+                # конец позже (над длинной нотой поднимается её же дым).
+                on_time = abs(match.start(speed) - (start + delay)) <= tolerance
+                if not match.clipped and match.measured(speed) and (on_time or event.clipped):
                     onsets.append(match.start(speed) + lead_low)
-                offsets.append(match.end(speed) + lead_low)
+                if abs(match.end(speed) - (end + delay)) <= tolerance:
+                    offsets.append(match.end(speed) + lead_low)
             if not onsets:
                 initial = self._initial_onset(event.key, contact, speed)
                 if initial is None:
@@ -626,15 +650,23 @@ class LineSensor:
 
     @staticmethod
     def _match(
-        event: _Event, candidates: list[_Event], delay: float, tolerance: float, speed: float
+        event: _Event,
+        candidates: list[_Event],
+        delay: float,
+        window: tuple[float, float],
+        speed: float,
     ) -> _Event | None:
-        """Событие нижней полосы, порождённое тем же блоком."""
+        """Событие нижней полосы, порождённое тем же блоком.
+
+        `window` — насколько раньше и позже ожидаемого может начаться событие.
+        """
         if event.clipped:
             start, end = event.start(speed) + delay, event.end(speed) + delay
             overlapping = [c for c in candidates if c.start(speed) < end and c.end(speed) > start]
             return overlapping[0] if overlapping else None
         expected = event.start(speed) + delay
-        near = [c for c in candidates if abs(c.start(speed) - expected) <= tolerance]
+        early, late = window
+        near = [c for c in candidates if -early <= c.start(speed) - expected <= late]
         return min(near, key=lambda c: abs(c.start(speed) - expected)) if near else None
 
     def _note(self, key: int, onsets: list[float], offsets: list[float], share: float) -> NoteEvent:
@@ -690,7 +722,9 @@ def _split_hands(found: list[tuple[NoteEvent, npt.NDArray[np.float64]]]) -> list
     профиль собирает самые частые цвета зоны блоков, и на тёмных роликах
     туда попадает фон и дым. Если оттенки не делятся на две заметно разные
     группы, рука остаётся неизвестной — её определит этап нотации по
-    голосоведению. Какая группа левая, решает регистр: партия левой руки ниже.
+    голосоведению. Две группы, сменяющие друг друга во времени, — это смена
+    палитры, а не руки (`_MIN_HAND_MIXING`). Какая группа левая, решает
+    регистр: партия левой руки ниже.
     """
     notes = [note for note, _ in found]
     if not found:
@@ -703,12 +737,29 @@ def _split_hands(found: list[tuple[NoteEvent, npt.NDArray[np.float64]]]) -> list
     groups = _hue_groups(hsv[coloured, 0])
     if groups is None:
         return notes
+    onsets = np.array([note.onset for note in notes])[coloured]
+    if _mixing(groups[np.argsort(onsets, kind="stable")]) < _MIN_HAND_MIXING:
+        # Цвета сменяют друг друга во времени, а не звучат вместе: это смена
+        # палитры по ходу ролика, а не две руки.
+        _log.info("два цвета блоков сменяют друг друга во времени — это не руки")
+        return notes
     hands = iter([Hand.RIGHT if group else Hand.LEFT for group in groups])
     labelled = [
         replace(note, hand=next(hands)) if colour_known else note
         for note, colour_known in zip(notes, coloured, strict=True)
     ]
     return BlockTracker._assign_hands_by_register(labelled)
+
+
+def _mixing(sequence: npt.NDArray[np.bool_]) -> float:
+    """Число серий одного цвета подряд относительно ожидаемого при случайном порядке."""
+    first = int(sequence.sum())
+    second = len(sequence) - first
+    if first == 0 or second == 0:
+        return 0.0
+    runs = 1 + int(np.count_nonzero(sequence[1:] != sequence[:-1]))
+    expected = 1 + 2 * first * second / (first + second)
+    return runs / expected
 
 
 def _hue_groups(hues: npt.NDArray[np.float64]) -> npt.NDArray[np.bool_] | None:

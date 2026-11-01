@@ -11,9 +11,11 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
+from mir.common.enums import Hand
+from mir.common.types import NoteEvent
 from mir.config import SensorConfig
 from mir.vision.keyboard_geometry import KeyboardGeometry
-from mir.vision.line_sensor import LineSensor, _hue_groups
+from mir.vision.line_sensor import LineSensor, _hue_groups, _split_hands
 
 WIDTH, HEIGHT = 640, 400
 TOP = 300  # верх клавиатуры
@@ -151,3 +153,27 @@ def test_hue_groups_single_colour_with_outlier():
     )
     hues = np.array([90.0] * 20 + [30.0])  # одна нота из двадцати одной: выброс
     assert _hue_groups(hues) is None
+
+
+def _found(hands_by_time: bool) -> list:
+    """Ноты двух цветов: вперемешку (руки) или первая половина одним цветом (смена палитры)."""
+    green, blue = np.array([80.0, 200.0, 80.0]), np.array([220.0, 140.0, 60.0])
+    found = []
+    for i in range(40):
+        low = i % 2 == 0
+        colour = (green if i < 20 else blue) if hands_by_time else (blue if low else green)
+        pitch = 45 + i % 5 if low else 70 + i % 5
+        note = NoteEvent(pitch=pitch, onset=1.0 + i * 0.25, offset=1.2 + i * 0.25, velocity=64)
+        found.append((note, colour))
+    return found
+
+
+def test_two_colours_played_together_are_hands():
+    notes = _split_hands(_found(hands_by_time=False))
+    assert all((n.hand is Hand.LEFT) == (n.pitch < 60) for n in notes)
+
+
+def test_palette_change_is_not_hands():
+    """Палитра сменилась посреди ролика (Rousseau, Clair de lune): цветов два, рук нет."""
+    notes = _split_hands(_found(hands_by_time=True))
+    assert all(n.hand is Hand.UNKNOWN for n in notes)

@@ -62,6 +62,27 @@ _HARMONIC_TOLERANCE = 0.9
 """Насколько составляющая спектра должна быть близка к сильнейшей,
 чтобы считаться той же периодичностью, а не случайным всплеском."""
 
+_SPECTRUM_PADDING = 8
+"""Во сколько раз дополнять профиль нулями перед преобразованием Фурье.
+
+Без дополнения спектр известен лишь в отсчётах `k / длина`, и если частота
+клавиш попадает между ними, амплитуда делится между соседними отсчётами —
+до 64 % от настоящей у каждого. Тогда основная проигрывает своей же второй
+гармонике, попавшей точно на отсчёт, и шаг клавиш выходит вдвое меньше.
+Так было на Clair de lune (Rousseau): детектор отказывал, причём в
+зависимости от того, какие кадры попали в выборку. При дополнении в 8 раз
+потеря амплитуды между отсчётами — меньше 1 %.
+"""
+
+_EDGE_CUT_TOLERANCE = 0.1
+"""Насколько граница клавиши может выйти за край кадра и остаться границей.
+
+Доля шага клавиш. Клавиатура, начинающаяся точно с края кадра, даёт границу
+в пикселе-двух за краем — это погрешность оценки фазы. Клавиша, срезанная
+кадром по-настоящему, выходит дальше: у Rousseau верхнее до — на 9 пикселей,
+четверть клавиши.
+"""
+
 _EXTENT_GAP_PERIODS = 12.0
 """Разрыв какой ширины считается перекрытием, а не краем клавиатуры.
 
@@ -329,10 +350,19 @@ class KeyboardDetector:
         first = int(np.floor((left - phase) / period))
         candidates = (phase + (first + np.arange(-1, count + 1)) * period).round().astype(int)
         margin = period * 0.25
+        # Граница заметно за краем кадра отбрасывается, а не прижимается к
+        # краю. Прижатая, она делала срезанную кадром клавишу «целой», но
+        # узкой, а раскладка равномерна по ширине — и шаг всех клавиш
+        # сжимался: у Rousseau 37.18 пикселя вместо 37.4, к правому краю
+        # клавиши уезжали на 11 пикселей, треть клавиши. Граница в пределах
+        # погрешности от края — клавиатура просто начинается с края кадра —
+        # прижимается, как раньше.
+        limit = gray.shape[1] - 1
+        tolerance = period * _EDGE_CUT_TOLERANCE
         grid = [
-            int(np.clip(x, 0, gray.shape[1] - 1))
+            int(np.clip(x, 0, limit))
             for x in candidates
-            if left - margin <= x <= right + margin
+            if left - margin <= x <= right + margin and -tolerance <= x <= limit + tolerance
         ]
 
         if len(grid) < 8:
@@ -361,8 +391,9 @@ class KeyboardDetector:
         trend = cv2.blur(profile.reshape(1, -1).astype(np.float32), (span, 1)).ravel()
         centered = profile - trend
 
-        spectrum = np.fft.rfft(centered)
-        freqs = np.fft.rfftfreq(len(centered))
+        size = len(centered) * _SPECTRUM_PADDING
+        spectrum = np.fft.rfft(centered, n=size)
+        freqs = np.fft.rfftfreq(size)
 
         min_period = max(self.config.min_key_width_px, 4.0)
         max_period = len(centered) / _MIN_VISIBLE_KEYS
@@ -380,11 +411,21 @@ class KeyboardDetector:
         # составляющая проверяется на то, не является ли она сама гармоникой:
         # если на вдвое или втрое меньшей частоте амплитуда сопоставима,
         # основная там.
+        #
+        # Номер отсчёта гармоники нацело на делитель не делится: основная
+        # ищется как сильнейшая составляющая в окрестности в полотсчёта
+        # исходного спектра. Раньше проверка требовала деления нацело, и
+        # на Clair de lune (Rousseau) пик на нечётном отсчёте её пропускал.
+        reach = _SPECTRUM_PADDING // 2
         for divisor in (4, 3, 2):
-            candidate = index // divisor
-            if index % divisor or candidate < 1 or not usable[candidate]:
+            low = max(round(index / divisor) - reach, 1)
+            high = round(index / divisor) + reach + 1
+            if high <= low:
                 continue
-            if magnitudes[candidate] >= magnitudes[index] * _HARMONIC_TOLERANCE:
+            candidate = low + int(np.argmax(magnitudes[low:high]))
+            if usable[candidate] and (
+                magnitudes[candidate] >= magnitudes[index] * _HARMONIC_TOLERANCE
+            ):
                 index = candidate
                 break
 
