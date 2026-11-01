@@ -89,7 +89,13 @@ def ingest(
     platform, resolved = resolve_source(source)
 
     title: str | None = None
-    if platform.name != "LOCAL_FILE":
+    cached = use_cache and platform.name != "LOCAL_FILE" and downloader.cache.get(resolved)
+    if cached:
+        # Ролик уже скачан — сеть не нужна вовсе. Раньше название всё равно
+        # запрашивалось у площадки, и при недоступном YouTube каждый запуск
+        # ждал минуту повторных попыток, хотя файл лежал на диске.
+        title = downloader.cache.title_of(resolved)
+    elif platform.name != "LOCAL_FILE":
         try:
             title = downloader.probe(str(source)).title
         except Exception as exc:

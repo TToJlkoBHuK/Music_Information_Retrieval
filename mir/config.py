@@ -18,7 +18,7 @@ import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
-from typing import Any, TypeVar, get_type_hints
+from typing import Any, TypeVar, get_origin, get_type_hints
 
 from mir.common.errors import ConfigError
 from mir.common.logging import get_logger
@@ -35,6 +35,7 @@ __all__ = [
     "IngestConfig",
     "MirConfig",
     "NotationConfig",
+    "SensorConfig",
     "VisionConfig",
     "load_config",
 ]
@@ -102,22 +103,67 @@ class TrackerConfig:
 
 
 @dataclass(frozen=True)
+class SensorConfig:
+    """Линия-датчик над клавиатурой: ноты по падающим блокам.
+
+    Положения полос — доли расстояния от верха кадра до клавиатуры: так они
+    не зависят ни от разрешения, ни от того, где визуализатор рисует
+    клавиатуру.
+    """
+
+    high_offset: float = 0.37
+    low_offset: float = 0.20
+    band_height: float = 0.01
+    solid_levels: tuple[float, ...] = (0.6, 0.5, 0.4)
+    """Кандидаты порога «сплошного» столбца — доли яркости блока.
+
+    Датчик проходит ролик со всеми сразу и оставляет тот, при котором
+    отсеяно меньше всего событий: слишком высокий порог искажает тусклые
+    блоки, слишком низкий пропускает дым — и то и другое видно по отсеву.
+    """
+    min_block_width: float = 0.4
+    confirm_coverage: float = 0.5
+    min_block_contrast: float = 40.0
+    max_delay: float = 2.0
+
+
+@dataclass(frozen=True)
 class VisionConfig:
     """Параметры анализа видеоряда."""
 
     keyboard: KeyboardConfig = field(default_factory=KeyboardConfig)
     tracker: TrackerConfig = field(default_factory=TrackerConfig)
+    sensor: SensorConfig = field(default_factory=SensorConfig)
 
 
 @dataclass(frozen=True)
 class AudioConfig:
-    """Параметры нейросетевой транскрипции аудио."""
+    """Параметры анализа звука: транскрипция, атаки, темп.
 
-    chunk_seconds: float = 60.0
-    overlap_seconds: float = 2.0
+    Обоснование каждого значения — в `config/README.md`.
+    """
+
+    device: str = "auto"
+    batch_size: int = 1
+    model_path: str = ""
     onset_threshold: float = 0.3
     offset_threshold: float = 0.3
-    hop_length: int = 256
+    frame_threshold: float = 0.1
+    pedal_offset_threshold: float = 0.2
+    hop_length: int = 128
+    onset_n_fft: int = 1024
+    onset_delta: float = 0.07
+    onset_wait: float = 0.03
+    refine_max_shift: float = 0.05
+    min_bpm: float = 40.0
+    max_bpm: float = 220.0
+    beat_tightness: float = 50.0
+    beat_match_tolerance: float = 0.07
+    min_tempo_confidence: float = 0.5
+    tempo_ioi_min_beats: float = 0.25
+    tempo_ioi_max_beats: float = 1.0
+    chord_window: float = 0.03
+    default_beats_per_bar: int = 4
 
 
 @dataclass(frozen=True)
@@ -127,6 +173,9 @@ class FusionConfig:
     onset_tolerance: float = 0.08
     max_av_offset: float = 1.0
     min_offset_confidence: float = 0.3
+    offset_resolution: float = 0.002
+    offset_smoothing: float = 0.015
+    min_offset_pairs: int = 8
     duration_weight: float = 0.3
     octave_artifact_ratio: float = 0.8
 
@@ -192,6 +241,9 @@ def _build(cls: type[T], data: Mapping[str, Any], path: str = "") -> T:
         if isinstance(field_type, type) and is_dataclass(field_type) and isinstance(value, Mapping):
             nested = f"{path}.{name}" if path else name
             kwargs[name] = _build(field_type, value, nested)
+        elif get_origin(field_type) is tuple and isinstance(value, list):
+            # В TOML это массив, а замороженному датаклассу нужен кортеж.
+            kwargs[name] = tuple(value)
         else:
             kwargs[name] = value
     return cls(**kwargs)
@@ -255,6 +307,79 @@ def _env_overrides() -> dict[str, Any]:
     return out
 
 
+def _validate_sensor(sensor: SensorConfig) -> list[str]:
+    problems: list[str] = []
+    if not 0 < sensor.low_offset < sensor.high_offset < 1:
+        problems.append(
+            "vision.sensor: нужно 0 < low_offset < high_offset < 1 — нижняя полоса "
+            "ближе к клавиатуре, чем верхняя"
+        )
+    if not 0 < sensor.band_height < 0.1:
+        problems.append("vision.sensor.band_height: доля высоты кадра от 0 до 0.1")
+    if not 0 < sensor.confirm_coverage <= 1:
+        problems.append("vision.sensor.confirm_coverage должен лежать в диапазоне (0, 1]")
+    if not sensor.solid_levels or not all(0 < level <= 1 for level in sensor.solid_levels):
+        problems.append(
+            "vision.sensor.solid_levels: нужен хотя бы один порог, каждый в диапазоне (0, 1]"
+        )
+    if sensor.min_block_width <= 0 or sensor.max_delay <= 0:
+        problems.append("vision.sensor: min_block_width и max_delay должны быть положительными")
+    return problems
+
+
+def _validate_audio(audio: AudioConfig) -> list[str]:
+    problems: list[str] = []
+    if audio.device not in ("auto", "cpu", "cuda"):
+        problems.append("audio.device: допустимы значения auto, cpu, cuda")
+    if audio.batch_size < 1:
+        problems.append("audio.batch_size должен быть не меньше 1")
+    for name in (
+        "onset_threshold",
+        "offset_threshold",
+        "frame_threshold",
+        "pedal_offset_threshold",
+    ):
+        if not 0.0 < getattr(audio, name) < 1.0:
+            problems.append(f"audio.{name} должен лежать строго между 0 и 1")
+    if audio.hop_length < 1 or audio.hop_length > audio.onset_n_fft:
+        problems.append("audio.hop_length должен быть положительным и не больше onset_n_fft")
+    if not 0 < audio.min_bpm < audio.max_bpm:
+        problems.append("audio.min_bpm должен быть положительным и меньше max_bpm")
+    # Удвоение и деление темпа пополам должны оставаться в пределах:
+    # иначе исправление ошибки вдвое просто некуда применить.
+    if audio.max_bpm < 2 * audio.min_bpm:
+        problems.append("audio.max_bpm должен быть хотя бы вдвое больше min_bpm")
+    if not 0 < audio.tempo_ioi_min_beats < audio.tempo_ioi_max_beats:
+        problems.append("audio.tempo_ioi_min_beats должен быть меньше tempo_ioi_max_beats")
+    if audio.tempo_ioi_max_beats < 2 * audio.tempo_ioi_min_beats:
+        problems.append(
+            "audio.tempo_ioi_max_beats должен быть хотя бы вдвое больше tempo_ioi_min_beats, "
+            "иначе при некоторых темпах ни одно прочтение не попадёт в диапазон"
+        )
+    for name in ("refine_max_shift", "beat_match_tolerance", "chord_window", "onset_wait"):
+        if getattr(audio, name) <= 0:
+            problems.append(f"audio.{name} должен быть положительным")
+    if audio.default_beats_per_bar < 1:
+        problems.append("audio.default_beats_per_bar должен быть положительным")
+    return problems
+
+
+def _validate_fusion(fusion: FusionConfig) -> list[str]:
+    problems: list[str] = []
+    if fusion.max_av_offset <= 0:
+        problems.append("fusion.max_av_offset должен быть положительным")
+    if not 0 < fusion.offset_resolution < fusion.offset_smoothing:
+        problems.append(
+            "fusion.offset_resolution должен быть положительным и меньше offset_smoothing, "
+            "иначе пик взаимной корреляции не разрешается"
+        )
+    if fusion.min_offset_pairs < 1:
+        problems.append("fusion.min_offset_pairs должен быть не меньше 1")
+    if not 0.0 <= fusion.min_offset_confidence <= 1.0:
+        problems.append("fusion.min_offset_confidence должен лежать в диапазоне 0..1")
+    return problems
+
+
 def validate(config: MirConfig) -> list[str]:
     """Проверить инварианты, невыразимые типами.
 
@@ -268,8 +393,9 @@ def validate(config: MirConfig) -> list[str]:
             "vision.tracker.off_threshold должен быть меньше on_threshold, "
             "иначе гистерезис не работает и подсветка будет дребезжать"
         )
-    if config.audio.overlap_seconds >= config.audio.chunk_seconds:
-        problems.append("audio.overlap_seconds должен быть меньше chunk_seconds")
+    problems.extend(_validate_sensor(config.vision.sensor))
+    problems.extend(_validate_audio(config.audio))
+    problems.extend(_validate_fusion(config.fusion))
     if not 0.0 <= config.notation.quantize_strength <= 1.0:
         problems.append("notation.quantize_strength должен лежать в диапазоне 0..1")
     if not 21 <= config.notation.hand_split_pitch <= 108:

@@ -166,6 +166,32 @@ def test_grid_survives_occluded_keys():
     assert len(boundaries) >= 30
 
 
+def test_key_cut_by_frame_edge_is_dropped():
+    """Клавиша, срезанная краем кадра на четверть, не сжимает остальные.
+
+    Прижатая к краю граница делала её «целой», но узкой, и при равномерной
+    раскладке шаг всех клавиш уменьшался: у Rousseau к правому краю клавиши
+    уезжали на треть ширины.
+    """
+    period = 37.4
+    last = 20 + 24 * period  # стык перед последней, срезанной клавишей
+    width = round(last + 0.75 * period)  # видны три четверти последней клавиши
+    frame = np.full((400, width, 3), 25, dtype=np.uint8)
+    strip = np.full((100, width, 3), 240, dtype=np.uint8)
+    x = 20.0
+    while x < width:  # последняя клавиша кончается за краем кадра
+        strip[:, round(x) : round(x) + 2] = 40
+        x += period
+    frame[240:340] = strip
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    boundaries = KeyboardDetector()._find_white_boundaries(gray, _band(240, 340))
+
+    step = (boundaries[-1] - boundaries[0]) / (len(boundaries) - 1)
+    assert step == pytest.approx(period, abs=0.2)
+    assert boundaries[-1] == pytest.approx(last, abs=2)
+
+
 def test_period_found_for_wide_keys():
     """Обрезанная клавиатура: клавиш мало, каждая широкая."""
     frame = np.full((400, 480, 3), 25, dtype=np.uint8)
@@ -179,6 +205,25 @@ def test_period_found_for_wide_keys():
     period, _ = detector._estimate_period(profile)
 
     assert period == pytest.approx(40.0, abs=2.0)
+
+
+@pytest.mark.parametrize("bin_offset", [0.0, 0.5])
+def test_period_not_halved_when_harmonic_peak_on_odd_bin(bin_offset: float):
+    """Пик второй гармоники на нечётном отсчёте спектра (Rousseau, Clair de lune).
+
+    Раньше основная проверялась только при делении номера отсчёта нацело,
+    и шаг клавиш выходил вдвое меньше настоящего — детектор отказывал.
+    """
+    length = 1920
+    period = length / (51 + bin_offset)  # 51.5 — основная между отсчётами, гармоника на 103-м
+    profile = np.zeros(length, dtype=np.float32)
+    for k in range(int(length / period) + 1):
+        x = round(k * period)
+        profile[x : x + 2] = 1.0  # узкий тёмный стык: у гребёнки гармоники почти равны
+
+    found, _ = KeyboardDetector()._estimate_period(profile)
+
+    assert found == pytest.approx(period, rel=0.03)
 
 
 def test_black_keys_survive_uneven_lighting():

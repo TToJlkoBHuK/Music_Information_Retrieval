@@ -20,9 +20,9 @@ python scripts/vision_cli.py analyze video.mp4 --truth notes.csv
 from __future__ import annotations
 
 import argparse
-import csv
 import logging
 import sys
+from collections import Counter
 from pathlib import Path
 
 try:
@@ -47,7 +47,7 @@ from mir.common.enums import Hand
 from mir.common.errors import KeyboardNotFoundError
 from mir.common.logging import setup_logging
 from mir.common.types import Frame, KeyboardLayout, NoteEvent
-from mir.eval import evaluate
+from mir.eval import evaluate, read_notes_csv, write_notes_csv
 from mir.vision import accel
 from mir.vision.analyzer import VisionResult, analyze_file
 
@@ -188,50 +188,34 @@ def print_result(result: VisionResult) -> None:
         f"клавиш {len(layout.keys)}, уверенность {layout.confidence:.2f}"
         f"{', обрезана' if layout.is_cropped else ''}"
     )
-    print(f"линия касания   : y={profile.hit_line_y}")
-    print(f"скорость падения: {profile.fall_speed:.0f} px/с")
+    sensor = result.sensor
+    if sensor is not None and sensor.enabled:
+        # Датчик меряет по самим блокам — точнее калибровки по выборке кадров.
+        print(f"линия касания   : y={sensor.contact_y:.0f}")
+        print(f"скорость падения: {sensor.fall_speed:.0f} px/с")
+    else:
+        print(f"линия касания   : y={profile.hit_line_y} (оценка калибровки)")
+        print(f"скорость падения: {profile.fall_speed:.0f} px/с (оценка калибровки)")
+    source = "блоки над клавиатурой" if result.source == "blocks" else "подсветка клавиш"
     print(
-        f"цветов блоков   : {len(profile.block_colors_hsv)}"
-        f"{' (руки различимы)' if profile.has_hand_colors else ' (руки неразличимы)'}"
-    )
-    print(
-        f"нот найдено     : {len(result.notes)} "
+        f"нот найдено     : {len(result.notes)}, источник — {source} "
         f"(подсветка {result.notes_from_keys}, блоки {result.notes_from_blocks})"
     )
+    if sensor is not None and sensor.enabled:
+        print(f"  отсеяно дыма, искр и прочего: {sensor.rejected}")
+        if len(sensor.candidates) > 1:
+            tried = ", ".join(f"{level:.2f} → {share:.0%}" for level, share in sensor.candidates)
+            print(f"  порог блоков {sensor.solid_level:.2f} — меньше всего отсеяно ({tried})")
+    hands = Counter(note.hand for note in result.notes)
+    if hands[Hand.UNKNOWN] == len(result.notes):
+        print("руки           : не различаются по цвету — разделит этап нотации")
+    else:
+        print(
+            f"руки           : правая {hands[Hand.RIGHT]}, левая {hands[Hand.LEFT]}, "
+            f"неизвестно {hands[Hand.UNKNOWN]}"
+        )
     for warning in result.warnings:
         print(f"  предупреждение: {warning}")
-
-
-def write_csv(notes: list[NoteEvent], path: Path) -> None:
-    """Сохранить ноты в CSV — тот же формат читается ключом --truth."""
-    with path.open("w", encoding="utf-8", newline="") as fh:
-        writer = csv.writer(fh)
-        writer.writerow(["pitch", "onset", "offset", "velocity", "hand"])
-        for note in notes:
-            writer.writerow(
-                [
-                    note.pitch,
-                    f"{note.onset:.4f}",
-                    f"{note.offset:.4f}",
-                    note.velocity,
-                    note.hand.name,
-                ]
-            )
-
-
-def read_csv(path: Path) -> list[NoteEvent]:
-    """Прочитать эталонные ноты."""
-    with path.open(encoding="utf-8", newline="") as fh:
-        return [
-            NoteEvent(
-                pitch=int(row["pitch"]),
-                onset=float(row["onset"]),
-                offset=float(row["offset"]),
-                velocity=int(row.get("velocity") or 64),
-                hand=Hand[row.get("hand") or "UNKNOWN"],
-            )
-            for row in csv.DictReader(fh)
-        ]
 
 
 def _save(image: Frame, path: Path, what: str) -> None:
@@ -391,9 +375,39 @@ def _draw_row_profile(median: Frame, per_row: Frame, threshold: float, band: obj
     return canvas
 
 
+def _download(url: str) -> Path | None:
+    """Скачать ролик в кэш. Повторный запуск с той же ссылкой не качает заново."""
+    from mir.common.errors import MirError
+    from mir.config import load_config
+    from mir.ingest.demuxer import find_ffmpeg
+    from mir.ingest.downloader import Downloader
+
+    def show(_stage: object, fraction: float) -> None:
+        end = "\n" if fraction >= 1.0 else ""
+        print(f"\rзагрузка ролика: {fraction:4.0%}", end=end, flush=True)
+
+    try:
+        find_ffmpeg()
+        video = Downloader(load_config().ingest).fetch(url, progress=show, use_cache=True)
+    except MirError as exc:
+        print()
+        print(f"Не удалось получить ролик: {exc.user_message}")
+        print(f"  причина: {exc}")
+        return None
+    print(f"видео в кэше    : {video}")
+    return video
+
+
 def command_analyze(args: argparse.Namespace) -> int:
-    """Разобрать готовый ролик."""
-    video = Path(args.video)
+    """Разобрать ролик по ссылке или готовый видеофайл."""
+    from mir.ingest.sources import is_url
+
+    if is_url(args.video):
+        video = _download(args.video)
+        if video is None:
+            return 1
+    else:
+        video = Path(args.video)
     if not video.exists():
         print(f"файл не найден: {video}")
         return 1
@@ -422,7 +436,7 @@ def command_analyze(args: argparse.Namespace) -> int:
     print_result(result)
 
     if args.csv:
-        write_csv(result.notes, Path(args.csv))
+        write_notes_csv(result.notes, Path(args.csv))
         print(f"ноты сохранены: {args.csv}")
 
     if args.overlay:
@@ -436,7 +450,7 @@ def command_analyze(args: argparse.Namespace) -> int:
         _save(draw_piano_roll(result.notes, title=video.name), Path(args.roll), "валик")
 
     if args.truth:
-        score = evaluate(read_csv(Path(args.truth)), result.notes)
+        score = evaluate(read_notes_csv(Path(args.truth)), result.notes)
         print()
         print(score.format_report(f"сравнение с {Path(args.truth).name}"))
         return 0 if score.f1 >= args.min_f1 else 1
@@ -509,7 +523,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     analyze = sub.add_parser("analyze", help="разобрать готовый ролик")
-    analyze.add_argument("video")
+    analyze.add_argument("video", help="ссылка на ролик или видеофайл")
     analyze.add_argument("--csv", help="куда сохранить найденные ноты")
     analyze.add_argument("--overlay", help="картинка с разметкой клавиатуры")
     analyze.add_argument("--roll", help="картинка с фортепианным валиком")

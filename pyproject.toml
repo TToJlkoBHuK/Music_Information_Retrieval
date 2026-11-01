@@ -19,6 +19,10 @@ dependencies = [
     # графической подсистемы, а полный пакет тянет GTK и падает без неё.
     "opencv-python-headless>=4.8",
     "numpy>=1.24",
+    # Атаки и темп (этап 4). В основных зависимостях: темп нужен всегда,
+    # даже без нейросетевой транскрипции.
+    "librosa>=0.10",
+    "soundfile>=0.12",
 ]
 
 [project.optional-dependencies]
@@ -33,6 +37,18 @@ dev = [
     # проект работает на запасной реализации из mir.vision.accel.
     "pybind11>=2.11",
     "cmake>=3.18",
+]
+# Нейросетевая транскрипция звука (#26). Отдельно от основных зависимостей:
+# PyTorch весит от 200 МБ (CPU) до 2.5 ГБ (CUDA), и правильную сборку pip
+# сам выбрать не может — её ставят заранее с нужного индекса, см.
+# `run audio-setup` и mir/audio/README.md.
+transcription = [
+    "torch>=2.0",
+    "piano_transcription_inference>=0.0.6",
+    "torchlibrosa>=0.1.0",
+    # Библиотека ByteDance импортирует audioread, но не объявляет его:
+    # раньше его тянул librosa, а с librosa 0.11 он необязателен.
+    "audioread>=2.1",
 ]
 docs = [
     "mkdocs-material>=9.5",
@@ -83,7 +99,14 @@ show_error_codes = true
 exclude = ["build/", "core/"]
 
 [[tool.mypy.overrides]]
-module = ["yt_dlp.*", "tomli.*"]
+module = [
+    "yt_dlp.*",
+    "tomli.*",
+    "soundfile.*",
+    "piano_transcription_inference.*",
+    "torchlibrosa.*",
+    "torch.*",
+]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

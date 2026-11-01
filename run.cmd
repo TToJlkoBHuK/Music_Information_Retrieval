@@ -15,6 +15,9 @@ rem   run demo                     synthetic clip with a known answer
 rem   run analyze video.mp4        analyse a real clip
 rem   run diagnose video.mp4       why keyboard detection failed
 rem   run fetch "https://..."      download a clip
+rem   run audio demo               audio stage on synthetic sound
+rem   run audio analyze video.mp4  notes, onsets and tempo from the sound
+rem   run audio-setup [cpu|cuda]   install PyTorch and the transcription model
 rem   run build                    build the native C++ core
 rem   run test                     run the test suite
 rem   run which                    show the chosen interpreter
@@ -53,6 +56,8 @@ if /i "%CMD%"=="fetch"    ( %PY% scripts\ingest_cli.py fetch %1 %2 %3 %4 %5 %6 %
 if /i "%CMD%"=="info"     ( %PY% scripts\ingest_cli.py probe %1 %2 %3 %4 %5 %6 %7 %8 %9 & exit /b !errorlevel! )
 if /i "%CMD%"=="doctor"   ( %PY% scripts\ingest_cli.py doctor %1 %2 %3 %4 %5 %6 %7 %8 %9 & exit /b !errorlevel! )
 if /i "%CMD%"=="bench"    ( %PY% scripts\bench_core.py %1 %2 %3 %4 %5 %6 %7 %8 %9 & exit /b !errorlevel! )
+if /i "%CMD%"=="audio"    ( %PY% scripts\audio_cli.py %1 %2 %3 %4 %5 %6 %7 %8 %9 & exit /b !errorlevel! )
+if /i "%CMD%"=="audio-setup" goto :audiosetup
 if /i "%CMD%"=="test"     ( %PY% -m pytest tests %1 %2 %3 %4 %5 %6 %7 %8 %9 & exit /b !errorlevel! )
 if /i "%CMD%"=="python"   ( %PY% %1 %2 %3 %4 %5 %6 %7 %8 %9 & exit /b !errorlevel! )
 if /i "%CMD%"=="build"    goto :build
@@ -83,6 +88,26 @@ echo.
 "!PYEXE!" -c "from mir.vision import accel; print('backend:', accel.backend_name())"
 exit /b 0
 
+:audiosetup
+rem PyTorch is not a regular dependency: pip cannot tell a CPU build from
+rem a CUDA one, and the wrong one is either 2 GB of dead weight or no GPU
+rem at all. The build is picked here explicitly:
+rem   run audio-setup          CPU build, works everywhere
+rem   run audio-setup cuda     CUDA 12.6 build for NVIDIA cards
+rem   run audio-setup cu128    any other CUDA build by its index name
+for /f "delims=" %%i in ('%PY% -c "import sys; print(sys.executable)"') do set "PYEXE=%%i"
+set "TORCH_INDEX=https://download.pytorch.org/whl/cpu"
+if /i "%~1"=="cuda" set "TORCH_INDEX=https://download.pytorch.org/whl/cu126"
+set "ARG=%~1"
+if /i "!ARG:~0,2!"=="cu" if /i not "!ARG!"=="cuda" set "TORCH_INDEX=https://download.pytorch.org/whl/!ARG!"
+echo Interpreter: !PYEXE!
+echo PyTorch from: !TORCH_INDEX!
+"!PYEXE!" -m pip install torch --index-url !TORCH_INDEX! || exit /b 1
+"!PYEXE!" -m pip install -e ".[transcription]" || exit /b 1
+"!PYEXE!" scripts\audio_cli.py fetch-model || exit /b 1
+"!PYEXE!" scripts\audio_cli.py doctor
+exit /b !errorlevel!
+
 :usage
 echo Usage: run ^<command^> [arguments]
 echo.
@@ -92,6 +117,8 @@ echo   diagnose  why keyboard detection failed
 echo   fetch     download a clip by URL
 echo   info      clip metadata without downloading
 echo   doctor    network and FFmpeg diagnostics
+echo   audio     audio stage: demo, analyze, sync, fetch-model, doctor
+echo   audio-setup  install PyTorch and the transcription model
 echo   bench     compare the C++ core against numpy
 echo   build     build the native C++ core
 echo   test      run the test suite

@@ -105,25 +105,50 @@ class KeyboardLayout:
 
 ### `TempoMap` — временна́я сетка
 
+Заполняется на этапе 4 (`mir/audio/tempo.py`).
+
 ```python
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class TempoMap:
-    bpm: float  # средний темп
-    beats: npt.NDArray[np.float64]  # моменты долей, секунды
-    downbeats: npt.NDArray[np.float64]  # моменты сильных долей (начала тактов)
-    confidence: float
+    beats: npt.NDArray[np.float64]  # моменты долей, секунды; не меньше двух
+    downbeats: npt.NDArray[np.float64]  # сильные доли — начала тактов
+    beats_per_bar: int = 4  # предварительно, размер определяет этап 5
+    confidence: float = 1.0  # доля долей, совпавших с атаками звука
+    is_manual: bool = False  # темп задан пользователем (F-31)
 
-    def seconds_to_beats(self, t: float) -> float:
-        """Секунды → позиция в долях. Интерполяция по сетке beats,
-        поэтому корректно работает при переменном темпе."""
+    @property
+    def bpm(self) -> float: ...  # средний темп по крайним долям
 
+    def seconds_to_beats(self, t: float) -> float: ...  # интерполяция по beats
     def beats_to_seconds(self, b: float) -> float: ...
+    def local_bpm(self, t: float) -> float: ...  # темп в окрестности момента
+    def nearest_grid_point(self, t: float, subdivision: int = 4) -> float: ...
+    def shifted(self, offset: float) -> TempoMap: ...  # при компенсации рассинхрона
 
-    def nearest_grid_point(self, t: float, subdivision: int = 4) -> float:
-        """Ближайший узел сетки. subdivision=4 → шестнадцатые."""
+    @classmethod
+    def constant(cls, bpm, duration, start=0.0, beats_per_bar=4) -> TempoMap: ...
 ```
 
-Метод `seconds_to_beats` через интерполяцию, а не через деление на BPM: живое исполнение с rubato имеет плавающий темп, и линейная формула даёт накопительную ошибку к концу произведения.
+Метод `seconds_to_beats` через интерполяцию, а не через деление на BPM: живое исполнение с rubato имеет плавающий темп, и линейная формула даёт накопительную ошибку к концу произведения. Тест `test_linear_formula_would_drift`: на ускорении 60→120 BPM линейная формула в середине пьесы ошибается больше чем на две доли.
+
+`bpm` считается по крайним долям, а не по медиане интервалов: интервалы квантованы шагом анализа (8 мс), и медиана по ним даёт ошибку до процента.
+
+Массивы защищены от записи (`flags.writeable = False`): `frozen=True` запрещает заменить поле, но не изменить содержимое массива на месте.
+
+### `PedalEvent` — нажатие педали
+
+```python
+@dataclass(frozen=True, slots=True)
+class PedalEvent:
+    onset: float
+    offset: float
+```
+
+Правая (демпферная) педаль из нейросетевой транскрипции (F-13). В нотах превращается в обозначения Ped./*.
+
+### `CancelCheck` — опрос отмены
+
+`Callable[[], bool]`: длительные этапы опрашивают его между порциями работы и при `True` бросают `CancelledError`. Функция, а не флаг: интерфейс держит `threading.Event`, CLI — ничего, и обоим удобно передать то, что у них есть.
 
 ### `Transcription` — результат распознавания целиком
 

@@ -104,6 +104,44 @@ jobs:
       - name: Тесты с ядром
         run: pytest tests -q
 
+  transcription:
+    name: Нейросеть транскрипции (F-09)
+    runs-on: ubuntu-latest
+    # Отдельно от основной проверки: PyTorch ставится несколько минут,
+    # и гонять его на каждой версии Python незачем. Здесь проверяется то,
+    # что без PyTorch не проверить: проход по сегментам на настоящей
+    # архитектуре совпадает с исходной библиотекой побитово, а файл весов
+    # без части параметров отвергается.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Установить PyTorch для процессора
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Установить зависимости
+        run: pip install -e ".[dev,transcription]"
+
+      # Веса — 172 МБ с Zenodo. Кэш по контрольной сумме: качаются один раз.
+      - name: Кэш весов модели
+        uses: actions/cache@v4
+        with:
+          path: ~/.mir_cache/models
+          key: bytedance-crnn-22b961b77c1878239fec963362097045
+
+      # Недоступность Zenodo не должна валить проверку кода: без весов
+      # дымовой тест на них пропускается, остальные идут.
+      - name: Скачать веса модели
+        continue-on-error: true
+        run: python scripts/audio_cli.py fetch-model
+
+      - name: Тесты транскрипции
+        run: pytest tests/integration/test_audio_pipeline.py tests/unit/test_transcriber.py -v
+
   docs:
     name: Сборка документации
     runs-on: ubuntu-latest

@@ -232,6 +232,57 @@ run build
 python scripts/bench_core.py     # таблица сравнения с numpy
 ```
 
+## Этап 4: анализ звука
+
+После обновления ветки один раз доустановите зависимости — добавились `librosa` и `soundfile`:
+
+```bash
+run python -m pip install -e ".[dev]"
+```
+
+### Самопроверка без единого файла
+
+```bash
+run audio demo
+```
+
+Собирает звук из известного списка нот и печатает ошибку темпа, точность атак и оценку рассинхрона двумя способами. Файл `build/audio_demo/beats.wav` — тот же звук со щелчками на найденных долях: послушайте его, это самая быстрая проверка темпа.
+
+### Свой ролик без нейросети
+
+```bash
+run audio analyze video.mp4 --no-transcribe --clicks beats.wav
+```
+
+Атаки и темп за секунды. Щелчки в `beats.wav` должны идти вместе с музыкой, высокий — на сильную долю.
+
+### Нейросетевая транскрипция
+
+```bash
+run audio-setup                  # PyTorch для процессора, библиотека, веса 172 МБ
+run audio-setup cuda             # то же для видеокарты NVIDIA
+run audio doctor                 # что установлено и на чём будет считать
+run audio analyze video.mp4 --seconds 30 --csv audio_notes.csv
+```
+
+### Ролик по ссылке
+
+Все команды этапов 3 и 4 принимают ссылку вместо файла. Ролик скачивается один раз в кэш, дальше берётся оттуда:
+
+```bash
+run audio analyze "https://youtu.be/ID" --no-transcribe --clicks beats.wav
+run audio analyze "https://youtu.be/ID" --csv audio_notes.csv
+run analyze "https://youtu.be/ID" --csv video_notes.csv
+run audio sync "https://youtu.be/ID" --video-csv video_notes.csv --audio-csv audio_notes.csv
+```
+
+### Рассинхрон звука и картинки
+
+```bash
+run analyze video.mp4 --csv video_notes.csv
+run audio sync video.mp4 --video-csv video_notes.csv --audio-csv audio_notes.csv
+```
+
 ## Проверка качества кода
 
 ```bash
@@ -273,11 +324,27 @@ mkdocs build     # статический сайт в site/
 | F-06 автодетекция клавиатуры | `vision_cli.py demo` → диапазон 36..96 без настройки |
 | F-07 обрезанная клавиатура | `test_cropped_keyboard_keeps_absolute_pitch`: диапазон 53..72 восстановлен точно |
 | F-08 трекинг нот | `vision_cli.py demo` → F1 = 1.000 |
-| F-09 разделение рук | тот же вывод, строка «рука 16/16» |
+| NF-09 разделение рук | тот же вывод, строка «рука 16/16» |
 | F-12 автокалибровка | `demo --scheme dark` и `--scheme mono` работают без правки настроек |
 | NF-01 скорость | `bench_core.py`: 0.8 с против 21.2 с на четырёхминутном ролике |
 | NF-16 типизация | `mypy mir scripts tests` → «Success» |
 | NF-18 без магических чисел | Пороги трекинга в `config/default.toml`, пояснения — рядом |
+
+## Что проверять при приёмке этапа 4
+
+| Требование | Как проверить |
+|---|---|
+| F-09 распознавание по звуку | `run audio analyze video.mp4` → ноты с `source=AUDIO`; механика — `test_streaming_matches_original_library` |
+| F-11 рассинхрон | `run audio demo` → сдвиг найден; `test_av_sync.py` на собранном ролике mp4/AAC |
+| F-13 педаль | строка «педаль N раз» в выводе `analyze` |
+| F-14 темп | `run audio demo` → ошибка в пределах NF-08 |
+| F-31 ручной темп | `analyze --bpm 72` → ровно 72.0 BPM |
+| F-35 понятные ошибки | `analyze` без PyTorch → инструкция по установке, без traceback |
+| NF-02 скорость на CPU | строка «× реального времени» в выводе `analyze` |
+| NF-08 ошибка темпа ≤ 2 % | `test_metronome_exact`, `test_music_within_nf08` |
+| NF-12 без GPU | `run audio doctor` → `cpu` |
+| NF-14 веса отдельно | веса в `~/.mir_cache/models`, в репозитории и дистрибутиве их нет |
+| NF-18 без магических чисел | `[audio]` и `[fusion]` в `config/default.toml`, обоснования — в `config/README.md` |
 
 ## Известные ограничения
 
