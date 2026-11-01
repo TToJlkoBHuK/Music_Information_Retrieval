@@ -489,7 +489,8 @@ def command_compare(args: argparse.Namespace) -> int:
 
     # По началам нот: педаль на них не влияет, поэтому оценка строже валиков.
     # Звук здесь вместо эталона — его ошибки тоже войдут в счёт.
-    estimate = estimate_av_offset(video, audio, load_config().fusion)
+    fusion = load_config().fusion
+    estimate = estimate_av_offset(video, audio, fusion)
     shifted = [
         replace(n, onset=n.onset + estimate.offset, offset=n.offset + estimate.offset)
         for n in video
@@ -504,6 +505,14 @@ def command_compare(args: argparse.Namespace) -> int:
         f"(уверенность {estimate.confidence:.2f}); "
         f"средняя ошибка начала {score.onset_error_avg * 1000:.1f} мс"
     )
+    if estimate.confidence < fusion.min_offset_confidence:
+        # Так бывает, когда файлы от разных роликов: окно и числа при этом
+        # печатаются как обычно, и ошибку легко не заметить.
+        print(
+            "  ВНИМАНИЕ: сдвиг не найден уверенно, каналы почти не совпадают.\n"
+            "  Проверьте, что оба файла от одного ролика; если да — один из\n"
+            "  каналов ошибается (так выглядел разбор с подсветкой клавиш при руках, В-05)."
+        )
 
     if args.roll:
         draw_two_rolls(video, audio, start, end, Path(args.roll))
