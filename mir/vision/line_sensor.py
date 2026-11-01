@@ -44,7 +44,7 @@ from mir.common.types import Frame, KeyboardLayout, NoteEvent
 from mir.config import SensorConfig
 from mir.vision.block_tracker import BlockTracker
 
-__all__ = ["LineSensor", "SensorReport"]
+__all__ = ["LineSensor", "SensorBank", "SensorReport"]
 
 _log = get_logger(__name__)
 
@@ -199,6 +199,8 @@ class SensorReport:
         confirmed: Нот подтверждено нижней полосой.
         rejected: Событий верхней полосы отброшено как дым, искры и прочее.
         reason: Почему датчик не работал.
+        solid_level: Порог «сплошного» столбца, с которым получены ноты.
+        candidates: Испробованные пороги и доля отсеянного при каждом.
     """
 
     enabled: bool
@@ -207,6 +209,14 @@ class SensorReport:
     confirmed: int = 0
     rejected: int = 0
     reason: str = ""
+    solid_level: float = 0.0
+    candidates: tuple[tuple[float, float], ...] = ()
+
+    @property
+    def rejected_share(self) -> float:
+        """Доля отсеянного среди всех событий верхней полосы."""
+        total = self.confirmed + self.rejected
+        return self.rejected / total if total else 1.0
 
 
 def _background(sample: list[Frame], top: int, bottom: int) -> npt.NDArray[np.int16]:
@@ -275,6 +285,10 @@ class LineSensor:
         sample: Кадры выборки по всему ролику — для фона полос и яркости блоков.
         fps: Частота кадров.
         config: Параметры из `[vision.sensor]`.
+        solid_level: Порог «сплошного» столбца; по умолчанию первый из
+            `config.solid_levels`.
+        background: Готовый фон от другого датчика того же ролика — чтобы не
+            считать его заново (`SensorBank`).
     """
 
     def __init__(
@@ -283,11 +297,15 @@ class LineSensor:
         sample: list[Frame],
         fps: float,
         config: SensorConfig,
+        solid_level: float | None = None,
+        background: npt.NDArray[np.int16] | None = None,
     ) -> None:
         self.layout = layout
         self.fps = fps
         self.config = config
-        self.report = SensorReport(enabled=False)
+        self.solid_level = solid_level if solid_level is not None else config.solid_levels[0]
+        self.background: npt.NDArray[np.int16] | None = None
+        self.report = SensorReport(enabled=False, solid_level=self.solid_level)
         self._bands: list[_Band] = []
         self._bottoms: list[int] = []
         self._initial_bottom: dict[int, int] = {}
@@ -308,7 +326,9 @@ class LineSensor:
             self.report.reason = "полоса датчика не помещается над клавиатурой"
             return
         first = min(tops)
-        background = _background(sample, first, keyboard_top)
+        if background is None:
+            background = _background(sample, first, keyboard_top)
+        self.background = background
         x_range = (int(layout.bbox[0]), int(layout.bbox[0] + layout.bbox[2]))
         low_rows = (max(tops) - first, max(tops) - first + height)
         self._zone_end = first + _zone_end(background, low_rows, x_range, config.min_block_contrast)
@@ -325,7 +345,7 @@ class LineSensor:
             self._centers.astype(int)[:, None] + offsets[None, :], 0, sample[0].shape[1] - 1
         )
 
-        level = min(band.level for band in self._bands) / config.solid_level
+        level = min(band.level for band in self._bands) / self.solid_level
         if level < config.min_block_contrast:
             self.report.reason = (
                 f"над клавиатурой нет блоков: яркость {level:.0f} при пороге "
@@ -342,7 +362,7 @@ class LineSensor:
         stack = np.stack([frame[top:bottom] for frame in sample]).astype(np.int16)
         deviation = np.abs(stack - background[:rows]).max(axis=3).mean(axis=1)
         block_level = float(np.percentile(deviation, _BLOCK_LEVEL_PERCENTILE))
-        return _Band(top, bottom, background, self.config.solid_level * block_level)
+        return _Band(top, bottom, background, self.solid_level * block_level)
 
     @property
     def enabled(self) -> bool:
@@ -492,6 +512,7 @@ class LineSensor:
             contact_y=contact,
             confirmed=len(notes),
             rejected=rejected,
+            solid_level=self.solid_level,
         )
         _log.info(
             "датчик блоков: %d нот, отброшено %d, скорость %.0f px/с, касание y=%.0f",
@@ -591,11 +612,20 @@ class LineSensor:
             # со сдвигом на задержку — войти или выйти. Второе условие
             # отсекает неподвижное: световой луч или полосу заставки, которые
             # стоят в обеих полосах сразу, — покрытие у них полное, а сдвига
-            # нет. Достаточно одного из краёв.
-            shifted = match is not None or any(
-                abs(c.end(speed) - (end + delay)) <= tolerance for c in candidates
-            )
-            if share < self.config.confirm_coverage or not (shifted or event.clipped):
+            # нет. Достаточно одного из краёв. Конец в нижней полосе может
+            # запоздать: над долгой нотой поднимается её же дым. У блока,
+            # стоявшего в полосе с первого кадра, начала нет — нужен конец:
+            # иначе луч, светивший с начала разбора, проходил как нота.
+            ended = any(-tolerance <= c.end(speed) - (end + delay) <= early for c in candidates)
+            shifted = ended if event.clipped else match is not None or ended
+            # Нижняя полоса бывает залита дымом прошлых ударов по той же
+            # клавише, и у быстрых повторов (остинато Interstellar, 0.27 с)
+            # в ней нет ни входа, ни выхода блока. Тогда довольно того, что
+            # блок вошёл в верхнюю полосу сверху: низ прослежен на расстоянии,
+            # возможном за кадр. Луч или вспышка загораются во весь столбец
+            # сразу, дым приходит снизу — у них такого входа нет.
+            entered = not event.clipped and event.measured(speed)
+            if share < self.config.confirm_coverage or not (shifted or entered):
                 rejected += 1
                 continue
             onsets = [] if event.clipped else [start + lead_high]
@@ -619,10 +649,14 @@ class LineSensor:
 
         # Блок, к началу наблюдения уже миновавший верхнюю полосу, виден
         # только нижней. Дыма в первые секунды ещё нет, и такой блок — нота.
+        # Если же клавиша светилась и в верхней полосе с первого кадра, это
+        # не тот случай: падающий блок там разобран выше, а неподвижный луч
+        # стоит в обеих полосах сразу и нотой не считается.
         first = self._first_time if self._first_time is not None else 0.0
+        lit_on_top = {event.key for event in high.events if event.clipped}
         for event in low.events:
             early = event.start_time < first + delay + tolerance
-            if not early or id(event) in used:
+            if not early or id(event) in used or event.key in lit_on_top:
                 continue
             onset = (
                 event.start(speed) + lead_low
@@ -713,6 +747,78 @@ class LineSensor:
             return total / span
 
         return covered
+
+
+class SensorBank:
+    """Несколько датчиков с разными порогами — остаётся самый согласный.
+
+    Порог «сплошного» столбца — доля яркости самых ярких блоков ролика. У
+    Rousseau блоки ровные и яркие, а дым и свечение вокруг — светлые: порог
+    нужен высокий. У визуализатора Interstellar (другой автор) долгие ноты
+    рисуются тусклыми полупрозрачными столбами с градиентом: при высоком
+    пороге блок замечался в верхней полосе на 0.4 с позже, задержка между
+    полосами не сходилась, и настоящая нота отбрасывалась — полнота 0.548.
+
+    Подсказка, какой порог верен, есть в самом ролике: доля отсеянных событий.
+    Слишком высокий порог искажает тусклые блоки, слишком низкий пропускает
+    дым — и в обоих случаях проверка двумя полосами отсеивает больше. Замеры
+    (порог → отсеяно → F1 против звука): Interstellar 0.6 → 22 %, 0.5 → 9.5 %,
+    0.4 → 18 %, лучший F1 при 0.45–0.5; Clair de lune 0.6 → 1.7 %, 0.5 → 8 %,
+    лучший F1 при 0.6; «Лунная» 0.6 → 15 %, 0.5 → 32 %, лучший при 0.6. На
+    всех трёх минимум отсева совпал с лучшим F1. Ролик проходится один раз:
+    все датчики получают одни и те же кадры, фон считается однажды.
+
+    Датчик, который при своём пороге не смог даже измерить скорость, из
+    выбора выпадает. Ограничение: если при высоком пороге одни блоки видны
+    чисто, а другие, тусклые, не видны вовсе (не искажены, а пропали), отсев
+    этого не покажет — останется высокий порог. Таких роликов в проверке
+    не было.
+    """
+
+    def __init__(
+        self, layout: KeyboardLayout, sample: list[Frame], fps: float, config: SensorConfig
+    ) -> None:
+        levels = config.solid_levels
+        first = LineSensor(layout, sample, fps, config, solid_level=levels[0])
+        self.sensors = [first]
+        if first.background is not None:
+            self.sensors += [
+                LineSensor(
+                    layout, sample, fps, config, solid_level=level, background=first.background
+                )
+                for level in levels[1:]
+            ]
+        self.report = first.report
+
+    @property
+    def enabled(self) -> bool:
+        """Блоки найдены, и датчики ведут наблюдение."""
+        return any(sensor.enabled for sensor in self.sensors)
+
+    def process_frame(self, frame: Frame, timestamp: float) -> None:
+        """Обработать кадр в BGR всеми датчиками."""
+        for sensor in self.sensors:
+            sensor.process_frame(frame, timestamp)
+
+    def finish(self) -> list[NoteEvent]:
+        """Ноты датчика с наименьшей долей отсеянного."""
+        results = [(sensor, sensor.finish()) for sensor in self.sensors]
+        working = [(sensor, notes) for sensor, notes in results if sensor.report.enabled]
+        if not working:
+            self.report = self.sensors[0].report
+            return []
+        # При равной доле остаётся более высокий порог — он первый в списке.
+        chosen, notes = min(working, key=lambda item: item[0].report.rejected_share)
+        candidates = tuple(
+            (sensor.solid_level, sensor.report.rejected_share) for sensor, _ in working
+        )
+        self.report = replace(chosen.report, candidates=candidates)
+        _log.info(
+            "порог блоков %.2f: отсеяно %s",
+            chosen.solid_level,
+            ", ".join(f"{level:.2f} → {share:.1%}" for level, share in candidates),
+        )
+        return notes
 
 
 def _split_hands(found: list[tuple[NoteEvent, npt.NDArray[np.float64]]]) -> list[NoteEvent]:

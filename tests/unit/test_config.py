@@ -73,6 +73,16 @@ class TestValidation:
         with pytest.raises(ConfigError, match="гистерезис"):
             clean_load(overrides={"vision": {"tracker": {"off_threshold": 0.9}}})
 
+    def test_sensor_levels_list_becomes_tuple(self, clean_load) -> None:
+        """В TOML пороги — массив, а замороженному датаклассу нужен кортеж."""
+        config = clean_load(overrides={"vision": {"sensor": {"solid_levels": [0.7, 0.5]}}})
+        assert config.vision.sensor.solid_levels == (0.7, 0.5)
+        hash(config)  # со списком внутри замороженный датакласс не хэшируется
+
+    def test_sensor_levels_must_not_be_empty(self, clean_load) -> None:
+        with pytest.raises(ConfigError, match="solid_levels"):
+            clean_load(overrides={"vision": {"sensor": {"solid_levels": []}}})
+
     def test_bpm_range_ordered(self, clean_load) -> None:
         with pytest.raises(ConfigError, match="min_bpm"):
             clean_load(overrides={"audio": {"min_bpm": 300.0}})

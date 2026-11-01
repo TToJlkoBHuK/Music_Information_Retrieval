@@ -18,7 +18,7 @@ import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
-from typing import Any, TypeVar, get_type_hints
+from typing import Any, TypeVar, get_origin, get_type_hints
 
 from mir.common.errors import ConfigError
 from mir.common.logging import get_logger
@@ -114,7 +114,13 @@ class SensorConfig:
     high_offset: float = 0.37
     low_offset: float = 0.20
     band_height: float = 0.01
-    solid_level: float = 0.6
+    solid_levels: tuple[float, ...] = (0.6, 0.5, 0.4)
+    """Кандидаты порога «сплошного» столбца — доли яркости блока.
+
+    Датчик проходит ролик со всеми сразу и оставляет тот, при котором
+    отсеяно меньше всего событий: слишком высокий порог искажает тусклые
+    блоки, слишком низкий пропускает дым — и то и другое видно по отсеву.
+    """
     min_block_width: float = 0.4
     confirm_coverage: float = 0.5
     min_block_contrast: float = 40.0
@@ -235,6 +241,9 @@ def _build(cls: type[T], data: Mapping[str, Any], path: str = "") -> T:
         if isinstance(field_type, type) and is_dataclass(field_type) and isinstance(value, Mapping):
             nested = f"{path}.{name}" if path else name
             kwargs[name] = _build(field_type, value, nested)
+        elif get_origin(field_type) is tuple and isinstance(value, list):
+            # В TOML это массив, а замороженному датаклассу нужен кортеж.
+            kwargs[name] = tuple(value)
         else:
             kwargs[name] = value
     return cls(**kwargs)
@@ -307,9 +316,12 @@ def _validate_sensor(sensor: SensorConfig) -> list[str]:
         )
     if not 0 < sensor.band_height < 0.1:
         problems.append("vision.sensor.band_height: доля высоты кадра от 0 до 0.1")
-    for name in ("solid_level", "confirm_coverage"):
-        if not 0 < getattr(sensor, name) <= 1:
-            problems.append(f"vision.sensor.{name} должен лежать в диапазоне (0, 1]")
+    if not 0 < sensor.confirm_coverage <= 1:
+        problems.append("vision.sensor.confirm_coverage должен лежать в диапазоне (0, 1]")
+    if not sensor.solid_levels or not all(0 < level <= 1 for level in sensor.solid_levels):
+        problems.append(
+            "vision.sensor.solid_levels: нужен хотя бы один порог, каждый в диапазоне (0, 1]"
+        )
     if sensor.min_block_width <= 0 or sensor.max_delay <= 0:
         problems.append("vision.sensor: min_block_width и max_delay должны быть положительными")
     return problems

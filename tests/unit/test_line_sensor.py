@@ -15,7 +15,7 @@ from mir.common.enums import Hand
 from mir.common.types import NoteEvent
 from mir.config import SensorConfig
 from mir.vision.keyboard_geometry import KeyboardGeometry
-from mir.vision.line_sensor import LineSensor, _hue_groups, _split_hands
+from mir.vision.line_sensor import LineSensor, SensorBank, _hue_groups, _split_hands
 
 WIDTH, HEIGHT = 640, 400
 TOP = 300  # верх клавиатуры
@@ -36,13 +36,41 @@ def blank() -> npt.NDArray[np.uint8]:
     return frame
 
 
-def draw_block(frame: npt.NDArray[np.uint8], pitch: int, onset: float, offset: float, t: float):
+def draw_block(
+    frame: npt.NDArray[np.uint8],
+    pitch: int,
+    onset: float,
+    offset: float,
+    t: float,
+    colour: tuple[int, int, int] = BLOCK,
+):
     bottom = CONTACT - (onset - t) * SPEED
     top = bottom - (offset - onset) * SPEED
     y0, y1 = int(max(top, 0)), int(min(bottom, CONTACT))
     if y1 > y0:
         left, right = GEOMETRY.bounds(pitch)
-        frame[y0:y1, int(left) + 1 : int(right) - 1] = BLOCK
+        frame[y0:y1, int(left) + 1 : int(right) - 1] = colour
+
+
+def render(
+    notes: list[tuple[int, float, float]],
+    seconds: float,
+    extra=None,
+    start: float = 0.0,
+    colour: tuple[int, int, int] = BLOCK,
+):
+    """Кадры ролика из блоков; `extra(frame, t)` (или их список) дорисовывает помехи."""
+    times = np.arange(start, seconds, 1 / FPS)
+    painters = extra if isinstance(extra, list) else [extra] if extra is not None else []
+    frames = []
+    for t in times:
+        frame = blank()
+        for pitch, onset, offset in notes:
+            draw_block(frame, pitch, onset, offset, t, colour)
+        for paint in painters:
+            paint(frame, t)
+        frames.append(frame)
+    return frames, times
 
 
 def run(
@@ -51,16 +79,8 @@ def run(
     extra=None,
     start: float = 0.0,
 ):
-    """Прогнать датчик по ролику из блоков; `extra(frame, t)` дорисовывает помехи."""
-    times = np.arange(start, seconds, 1 / FPS)
-    frames = []
-    for t in times:
-        frame = blank()
-        for pitch, onset, offset in notes:
-            draw_block(frame, pitch, onset, offset, t)
-        if extra is not None:
-            extra(frame, t)
-        frames.append(frame)
+    """Прогнать датчик по ролику из блоков."""
+    frames, times = render(notes, seconds, extra, start)
     sample = frames[:: max(len(frames) // 60, 1)]
     sensor = LineSensor(LAYOUT, sample, FPS, SensorConfig())
     for t, frame in zip(times, frames, strict=True):
@@ -177,3 +197,56 @@ def test_palette_change_is_not_hands():
     """Палитра сменилась посреди ролика (Rousseau, Clair de lune): цветов два, рук нет."""
     notes = _split_hands(_found(hands_by_time=True))
     assert all(n.hand is Hand.UNKNOWN for n in notes)
+
+
+def test_bank_keeps_high_level_on_clean_blocks():
+    """Чистые яркие блоки: более низкий порог ничего не добавляет, остаётся 0.6."""
+    truth = melody()
+    frames, times = render(truth, 9.0)
+    bank = SensorBank(LAYOUT, frames[:: max(len(frames) // 60, 1)], FPS, SensorConfig())
+    for t, frame in zip(times, frames, strict=True):
+        bank.process_frame(frame, float(t))
+    notes = bank.finish()
+
+    assert [n.pitch for n in notes] == [p for p, _, _ in truth]
+    assert bank.report.solid_level == pytest.approx(0.6)
+    assert len(bank.report.candidates) == 3
+
+
+def test_bank_lowers_level_when_blocks_are_dim():
+    """Тусклые блоки при ярких вспышках: порог подбирается под блоки.
+
+    Вспышки задают яркость «самых ярких блоков», и при пороге 0.6 тусклые
+    блоки не проходят вовсе — датчик с этим порогом не может даже измерить
+    скорость. При 0.5 и 0.4 ноты находятся все, а вспышки (обе полосы сразу)
+    отсеиваются. На ролике Interstellar механизм тоньше — блок искажался,
+    а не пропадал, — но итог тот же: прежний единый порог терял ноты.
+    """
+    truth = melody()[:8]
+    dim = (110, 110, 110)  # отклонение от фона ~90 при ~220 у вспышки
+
+    def flashes(frame, t):
+        if int(t * 2) % 3 == 0:  # мигающая вспышка на свободной клавише, в обеих полосах
+            left, right = GEOMETRY.bounds(50)
+            frame[150:CONTACT, int(left) : int(right)] = (245, 245, 245)
+
+    def brighter_on_top(frame, t):
+        # Верхняя часть тусклого блока чуть ярче: так у полупрозрачных столбов
+        # с градиентом — порог 0.6 задевает блок не от низа, а от середины.
+        for pitch, onset, offset in truth:
+            bottom = CONTACT - (onset - t) * SPEED
+            top = bottom - (offset - onset) * SPEED
+            mid = int((top + bottom) / 2)
+            left, right = GEOMETRY.bounds(pitch)
+            y0, y1 = int(max(top, 0)), int(min(mid, CONTACT))
+            if y1 > y0:
+                frame[y0:y1, int(left) + 1 : int(right) - 1] = (150, 150, 150)
+
+    frames, times = render(truth, 7.0, extra=[flashes, brighter_on_top], colour=dim)
+    bank = SensorBank(LAYOUT, frames[:: max(len(frames) // 60, 1)], FPS, SensorConfig())
+    for t, frame in zip(times, frames, strict=True):
+        bank.process_frame(frame, float(t))
+    notes = bank.finish()
+
+    assert bank.report.solid_level < 0.6
+    assert sorted(n.pitch for n in notes) == sorted(p for p, _, _ in truth)

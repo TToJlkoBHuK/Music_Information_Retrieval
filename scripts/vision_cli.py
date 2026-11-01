@@ -203,6 +203,9 @@ def print_result(result: VisionResult) -> None:
     )
     if sensor is not None and sensor.enabled:
         print(f"  отсеяно дыма, искр и прочего: {sensor.rejected}")
+        if len(sensor.candidates) > 1:
+            tried = ", ".join(f"{level:.2f} → {share:.0%}" for level, share in sensor.candidates)
+            print(f"  порог блоков {sensor.solid_level:.2f} — меньше всего отсеяно ({tried})")
     hands = Counter(note.hand for note in result.notes)
     if hands[Hand.UNKNOWN] == len(result.notes):
         print("руки           : не различаются по цвету — разделит этап нотации")

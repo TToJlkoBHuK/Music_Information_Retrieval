@@ -29,7 +29,7 @@ from mir.config import MirConfig, load_config
 from mir.vision.calibration import VisualizerProfile, calibrate
 from mir.vision.key_tracker import KeyTracker
 from mir.vision.keyboard_detector import KeyboardDetector, build_median_frame
-from mir.vision.line_sensor import LineSensor, SensorReport
+from mir.vision.line_sensor import SensorBank, SensorReport
 
 __all__ = ["VisionResult", "analyze_video"]
 
@@ -336,7 +336,7 @@ def analyze_video(
         )
 
         key_tracker = KeyTracker(layout, reference, config.vision.tracker)
-        sensor = LineSensor(layout, sample, media.fps, config.vision.sensor)
+        sensor = SensorBank(layout, sample, media.fps, config.vision.sensor)
 
         span_start, span_end = find_keyboard_span(
             capture, layout, reference, media.fps, media.frame_count
