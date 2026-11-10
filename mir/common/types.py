@@ -18,6 +18,7 @@ import numpy.typing as npt
 from mir.common.enums import Hand, Platform, Source, Stage
 
 __all__ = [
+    "BLACK_PITCH_CLASSES",
     "PITCH_MAX",
     "PITCH_MIN",
     "CancelCheck",
@@ -30,6 +31,7 @@ __all__ = [
     "ProgressCallback",
     "TempoMap",
     "VideoInfo",
+    "is_black_key",
 ]
 
 PITCH_MIN = 21
@@ -37,6 +39,15 @@ PITCH_MIN = 21
 
 PITCH_MAX = 108
 """MIDI-номер ноты до пятой октавы (C8) — верхняя клавиша фортепиано."""
+
+BLACK_PITCH_CLASSES = frozenset({1, 3, 6, 8, 10})
+"""Ступени внутри октавы, соответствующие чёрным клавишам (до-диез, ре-диез, ...)."""
+
+
+def is_black_key(pitch: int) -> bool:
+    """Чёрная ли клавиша у ноты с этим MIDI-номером."""
+    return pitch % 12 in BLACK_PITCH_CLASSES
+
 
 ProgressCallback = Callable[[Stage, float], None]
 """Колбэк прогресса: этап и доля выполнения в диапазоне 0..1."""

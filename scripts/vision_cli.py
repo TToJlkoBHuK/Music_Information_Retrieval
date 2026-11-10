@@ -47,7 +47,7 @@ from mir.common.enums import Hand
 from mir.common.errors import KeyboardNotFoundError
 from mir.common.logging import setup_logging
 from mir.common.types import Frame, KeyboardLayout, NoteEvent
-from mir.eval import evaluate, read_notes_csv, write_notes_csv
+from mir.eval import candidates_path, evaluate, read_notes_csv, write_notes_csv
 from mir.vision import accel
 from mir.vision.analyzer import VisionResult, analyze_file
 
@@ -438,6 +438,11 @@ def command_analyze(args: argparse.Namespace) -> int:
     if args.csv:
         write_notes_csv(result.notes, Path(args.csv))
         print(f"ноты сохранены: {args.csv}")
+        # Кандидаты пишутся всегда, даже пустые: иначе рядом остался бы
+        # файл от прошлого разбора, и слияние взяло бы чужие блоки.
+        unproven = candidates_path(Path(args.csv))
+        write_notes_csv(result.unconfirmed, unproven)
+        print(f"блоки-кандидаты: {unproven} ({len(result.unconfirmed)}, для сверки со звуком)")
 
     if args.overlay:
         frame = _first_frame(video)

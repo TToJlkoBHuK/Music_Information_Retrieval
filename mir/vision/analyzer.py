@@ -66,6 +66,9 @@ class VisionResult:
         notes_from_blocks: Нот от падающих блоков (линия-датчик).
         source: Какой источник дал итоговые ноты: `blocks` или `keys`.
         sensor: Подробности линии-датчика: скорость падения, линия касания.
+        unconfirmed: Блоки-кандидаты: то, что датчик видел, но не смог
+            доказать. Сами по себе не ноты; при слиянии каналов кандидат
+            вместе с нотой звука той же высоты — уже нота (`mir.fusion`).
     """
 
     notes: list[NoteEvent]
@@ -77,6 +80,7 @@ class VisionResult:
     notes_from_blocks: int = 0
     source: str = "keys"
     sensor: SensorReport | None = None
+    unconfirmed: list[NoteEvent] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
 
@@ -406,6 +410,7 @@ def analyze_video(
         notes_from_blocks=len(block_notes),
         source=source,
         sensor=sensor.report,
+        unconfirmed=sensor.unconfirmed if source == "blocks" else [],
         warnings=warnings,
     )
 
