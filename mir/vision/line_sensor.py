@@ -306,6 +306,8 @@ class LineSensor:
         self.solid_level = solid_level if solid_level is not None else config.solid_levels[0]
         self.background: npt.NDArray[np.int16] | None = None
         self.report = SensorReport(enabled=False, solid_level=self.solid_level)
+        self.unconfirmed: list[NoteEvent] = []
+        """Отсеянные события верхней полосы как ноты-кандидаты — после `finish`."""
         self._bands: list[_Band] = []
         self._bottoms: list[int] = []
         self._initial_bottom: dict[int, int] = {}
@@ -418,6 +420,15 @@ class LineSensor:
         region = frame[band.top : band.bottom].astype(np.int16)
         deviation = np.abs(region - band.background[: band.bottom - band.top]).max(axis=2)
         solid = self._solid_keys(deviation, band.level)
+        # Блок, который уже в полосе, остаётся в ней, пока сплошным остаётся
+        # столбец над серединой его клавиши. Свечение долгой ноты расширяет
+        # светлый участок в сторону, его центр уходит к соседней клавише, и
+        # без этой проверки нота рвалась надвое (В-10) — хотя сам блок никуда
+        # не девался. Зазор между повторами той же клавиши столбец гасит,
+        # поэтому повторы по-прежнему разделяются.
+        for key in band.active:
+            if not solid[key] and deviation[:, self._columns[key]].min() >= band.level:
+                solid[key] = True
         first = self._frames == 0
 
         # Номера из numpy приводятся к int сразу: ниже по ним индексируется
@@ -504,9 +515,10 @@ class LineSensor:
             return []
 
         contact = self._contact_line(low)
-        found, rejected = self._confirm(high, low, contact, speed)
+        found, unproven, rejected = self._confirm(high, low, contact, speed)
         notes = _split_hands(found)
         notes.sort(key=lambda n: (n.onset, n.pitch))
+        self.unconfirmed = sorted(unproven, key=lambda n: (n.onset, n.pitch))
 
         self.report = SensorReport(
             enabled=True,
@@ -577,10 +589,14 @@ class LineSensor:
 
     def _confirm(
         self, high: _Band, low: _Band, contact: float, speed: float
-    ) -> tuple[list[tuple[NoteEvent, npt.NDArray[np.float64]]], int]:
+    ) -> tuple[list[tuple[NoteEvent, npt.NDArray[np.float64]]], list[NoteEvent], int]:
         """Оставить блоки, дошедшие до нижней полосы, и найти их время.
 
-        Возвращает ноты вместе с цветом блока — по нему потом делятся руки.
+        Возвращает ноты вместе с цветом блока — по нему потом делятся руки,
+        отсеянные события верхней полосы как ноты-кандидаты и число отсеянных.
+        Кандидат сам по себе не доказан, но при слиянии каналов он вместе с
+        нотой звука той же высоты в тот же момент — уже два независимых
+        свидетельства (`mir.fusion`).
 
         Начало и конец ноты оцениваются по обеим полосам и усредняются: две
         независимые оценки уменьшают разброс. Если в верхней полосе начало
@@ -598,6 +614,7 @@ class LineSensor:
         notes: list[tuple[NoteEvent, npt.NDArray[np.float64]]] = []
         used: set[int] = set()
         rejected = 0
+        unproven: list[NoteEvent] = []
         for event in high.events:
             start, end = event.start(speed), event.end(speed)
             candidates = low_by_key.get(event.key, [])
@@ -629,6 +646,10 @@ class LineSensor:
             entered = not event.clipped and event.measured(speed)
             if share < self.config.confirm_coverage or not (shifted or entered):
                 rejected += 1
+                # У стоявшего с первого кадра начала нет — кандидатом не станет.
+                if not event.clipped:
+                    times = ([start + lead_high], [end + lead_high])
+                    unproven.append(self._note(event.key, *times, share))
                 continue
             onsets = [] if event.clipped else [start + lead_high]
             offsets = [end + lead_high]
@@ -668,7 +689,7 @@ class LineSensor:
             if onset is not None:
                 offsets = [event.end(speed) + lead_low]
                 notes.append((self._note(event.key, [onset], offsets, 0.5), event.colour))
-        return notes, rejected
+        return notes, unproven, rejected
 
     def _initial_onset(self, key: int, contact: float, speed: float) -> float | None:
         """Начало ноты, чей блок к первому кадру уже прошёл обе полосы.
@@ -791,6 +812,8 @@ class SensorBank:
                 for level in levels[1:]
             ]
         self.report = first.report
+        self.unconfirmed: list[NoteEvent] = []
+        """Отсеянные события выбранного датчика как ноты-кандидаты — после `finish`."""
 
     @property
     def enabled(self) -> bool:
@@ -815,12 +838,42 @@ class SensorBank:
             (sensor.solid_level, sensor.report.rejected_share) for sensor, _ in working
         )
         self.report = replace(chosen.report, candidates=candidates)
+        pool = [note for sensor, _ in working for note in sensor.unconfirmed]
+        pool += [note for sensor, found in working if sensor is not chosen for note in found]
+        self.unconfirmed = _candidate_pool(pool, notes, _MATCH_FRAMES / chosen.fps)
         _log.info(
             "порог блоков %.2f: отсеяно %s",
             chosen.solid_level,
             ", ".join(f"{level:.2f} → {share:.1%}" for level, share in candidates),
         )
         return notes
+
+
+def _candidate_pool(
+    pool: list[NoteEvent], confirmed: list[NoteEvent], tolerance: float
+) -> list[NoteEvent]:
+    """Ноты-кандидаты: всё, что видел хоть один датчик, кроме подтверждённых нот.
+
+    Сюда входят отсеянные события всех датчиков и ноты датчиков с другими
+    порогами. При пороге ниже выбранного видны тусклые блоки, но проходит и
+    дым — поэтому сами по себе это не ноты. Решает слияние каналов: дым не
+    совпадает с нотой звука той же высоты в тот же момент, а блок совпадает.
+
+    Кандидат, начавшийся внутри подтверждённой ноты той же высоты, — тот же
+    блок, увиденный иначе, и в набор не идёт. Из совпадающих кандидатов
+    остаётся самый уверенный.
+    """
+    spans: dict[int, list[tuple[float, float]]] = {}
+    for note in confirmed:
+        spans.setdefault(note.pitch, []).append((note.onset - tolerance, note.offset + tolerance))
+    kept: dict[int, list[NoteEvent]] = {}
+    for note in sorted(pool, key=lambda n: -n.confidence):
+        if any(start <= note.onset <= end for start, end in spans.get(note.pitch, [])):
+            continue
+        same = kept.setdefault(note.pitch, [])
+        if all(abs(other.onset - note.onset) > tolerance for other in same):
+            same.append(note)
+    return sorted((n for notes in kept.values() for n in notes), key=lambda n: (n.onset, n.pitch))
 
 
 def _split_hands(found: list[tuple[NoteEvent, npt.NDArray[np.float64]]]) -> list[NoteEvent]:

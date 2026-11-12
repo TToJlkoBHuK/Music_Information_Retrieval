@@ -13,9 +13,11 @@ from pathlib import Path
 
 import pytest
 
-from mir.common.enums import Hand
+from mir.common.enums import Hand, Source
 from mir.common.types import NoteEvent
+from mir.config import load_config
 from mir.eval import evaluate
+from mir.fusion import fuse
 from mir.vision.analyzer import analyze_file
 from tests.fixtures.synth import ColorScheme, SynthConfig, render_visualizer_video, simple_melody
 
@@ -225,3 +227,43 @@ def test_intro_is_skipped_automatically(tmp_path: Path, melody: list[NoteEvent])
 
     assert score.recall == pytest.approx(1.0)
     assert score.precision > 0.9
+
+
+def test_video_notes_fuse_with_audio(clean_video: Path, melody: list[NoteEvent]):
+    """Ноты настоящего разбора ролика сливаются со звуком: этапы 3 и 5 вместе.
+
+    Звук здесь — эталон со сдвигом 120 мс и педалью, плюс одна ложная нота:
+    нейросеть в тесты не тянем. Проверяется стык: формат нот видео, шкалы
+    времени, руки.
+    """
+    result = analyze_file(clean_video)
+    delay = 0.12
+    heard = [
+        replace(
+            note,
+            onset=note.onset + delay,
+            offset=note.offset + delay + 0.6,
+            hand=Hand.UNKNOWN,
+            source=Source.AUDIO,
+            confidence=0.86 + 0.02 * (i % 4),
+        )
+        for i, note in enumerate(melody)
+    ]
+    ghost = NoteEvent(84, 3.0, 3.4, 30, source=Source.AUDIO, confidence=0.4)
+
+    fused = fuse(
+        result.notes,
+        [*heard, ghost],
+        load_config(use_user_config=False, use_env=False).fusion,
+        candidates=result.unconfirmed,
+        layout=result.layout,
+        video_reliable=result.source == "blocks",
+    )
+
+    on_audio_clock = [replace(n, onset=n.onset + delay, offset=n.offset + delay) for n in melody]
+    score = evaluate(on_audio_clock, fused.notes)
+    assert score.f1 == pytest.approx(1.0)
+    assert score.hand_accuracy == pytest.approx(1.0)
+    assert all(note.source is Source.BOTH for note in fused.notes)
+    assert fused.curve.at(3.0) == pytest.approx(delay, abs=0.02)
+    assert 84 not in [note.pitch for note in fused.notes]
