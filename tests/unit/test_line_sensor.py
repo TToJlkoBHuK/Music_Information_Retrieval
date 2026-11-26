@@ -250,3 +250,65 @@ def test_bank_lowers_level_when_blocks_are_dim():
 
     assert bank.report.solid_level < 0.6
     assert sorted(n.pitch for n in notes) == sorted(p for p, _, _ in truth)
+
+
+def test_long_note_is_not_split_when_glow_pulls_it_aside():
+    """Свечение долгой ноты уводит светлый участок к соседней клавише (В-10).
+
+    Пока сплошным остаётся столбец над серединой клавиши, блок никуда не
+    делся: нота одна, а не две с обрывком на соседней клавише между ними.
+    """
+    truth = [*melody()[:6], (53, 1.0, 3.5)]  # короткие ноты нужны для скорости
+
+    def glow(frame, t):
+        if 2.0 <= t < 2.3:  # участок шире на 26 px: его центр ближе к фа-диезу
+            bottom = min(CONTACT, int(CONTACT - (1.0 - t) * SPEED))
+            top = max(int(CONTACT - (3.5 - t) * SPEED), 0)
+            _, right = GEOMETRY.bounds(53)
+            frame[top:bottom, int(right) - 1 : int(right) + 25] = BLOCK
+
+    notes, _ = run(truth, 6.0, extra=glow)
+    long_notes = [n for n in notes if n.pitch in (53, 54)]
+
+    assert [n.pitch for n in long_notes] == [53]
+    assert long_notes[0].duration == pytest.approx(2.5, abs=0.1)
+
+
+def test_unconfirmed_blocks_are_kept_as_candidates():
+    """Блок прошёл верхнюю полосу, а до нижней не дошёл: это не нота, а кандидат.
+
+    Сам по себе он не доказан, но слиянию каналов нужен: вместе с нотой
+    звука той же высоты в тот же момент — уже два свидетельства.
+    """
+    truth = melody()[:8]
+    hidden_pitch, hidden_onset, _ = truth[5]
+
+    def fade(frame, t):
+        # Ниже верхней полосы блок этой клавиши гаснет.
+        left, right = GEOMETRY.bounds(hidden_pitch)
+        frame[215:CONTACT, int(left) : int(right)] = BACKGROUND
+
+    frames, times = render(truth, 7.0, extra=fade)
+    bank = SensorBank(LAYOUT, frames[:: max(len(frames) // 60, 1)], FPS, SensorConfig())
+    for t, frame in zip(times, frames, strict=True):
+        bank.process_frame(frame, float(t))
+    notes = bank.finish()
+
+    assert hidden_pitch not in [n.pitch for n in notes]
+    assert len(notes) == len(truth) - 1
+    candidates = [n for n in bank.unconfirmed if n.pitch == hidden_pitch]
+    assert len(candidates) == 1
+    assert candidates[0].onset == pytest.approx(hidden_onset, abs=0.05)
+
+
+def test_candidates_never_repeat_confirmed_notes():
+    """То, что другой порог датчика тоже принял за ноту, кандидатом не становится."""
+    truth = melody()
+    frames, times = render(truth, 9.0)
+    bank = SensorBank(LAYOUT, frames[:: max(len(frames) // 60, 1)], FPS, SensorConfig())
+    for t, frame in zip(times, frames, strict=True):
+        bank.process_frame(frame, float(t))
+    notes = bank.finish()
+
+    assert len(notes) == len(truth)
+    assert bank.unconfirmed == []

@@ -55,6 +55,10 @@ docs = [
     "mkdocstrings[python]>=0.24",
     "mkdocs-gen-files>=0.5",
     "mkdocs-literate-nav>=0.6",
+    # pymdown-extensions 12 добавил обязательный аргумент в Highlight, а
+    # mkdocstrings 1.0.6 его не передаёт: сборка падает с TypeError.
+    # Проверено: с 12.3 — ошибка, с 11.0.2 — сборка проходит.
+    "pymdown-extensions<12",
 ]
 
 [project.scripts]

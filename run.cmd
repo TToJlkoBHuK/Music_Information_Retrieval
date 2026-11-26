@@ -18,6 +18,8 @@ rem   run fetch "https://..."      download a clip
 rem   run audio demo               audio stage on synthetic sound
 rem   run audio analyze video.mp4  notes, onsets and tempo from the sound
 rem   run audio-setup [cpu|cuda]   install PyTorch and the transcription model
+rem   run fuse video.mp4 ...       merge video and audio notes into one list
+rem   run ablation                 fusion vs single channels on a known answer
 rem   run build                    build the native C++ core
 rem   run test                     run the test suite
 rem   run which                    show the chosen interpreter
@@ -57,6 +59,11 @@ if /i "%CMD%"=="info"     ( %PY% scripts\ingest_cli.py probe %1 %2 %3 %4 %5 %6 %
 if /i "%CMD%"=="doctor"   ( %PY% scripts\ingest_cli.py doctor %1 %2 %3 %4 %5 %6 %7 %8 %9 & exit /b !errorlevel! )
 if /i "%CMD%"=="bench"    ( %PY% scripts\bench_core.py %1 %2 %3 %4 %5 %6 %7 %8 %9 & exit /b !errorlevel! )
 if /i "%CMD%"=="audio"    ( %PY% scripts\audio_cli.py %1 %2 %3 %4 %5 %6 %7 %8 %9 & exit /b !errorlevel! )
+rem `fuse` takes more than nine arguments, and %1..%9 would cut them off.
+rem %* is not affected by `shift` and still starts with the word "fuse",
+rem which is exactly the subcommand fusion_cli.py expects.
+if /i "%CMD%"=="fuse"     ( %PY% scripts\fusion_cli.py %* & exit /b !errorlevel! )
+if /i "%CMD%"=="ablation" ( %PY% scripts\ablation.py %1 %2 %3 %4 %5 %6 %7 %8 %9 & exit /b !errorlevel! )
 if /i "%CMD%"=="audio-setup" goto :audiosetup
 if /i "%CMD%"=="test"     ( %PY% -m pytest tests %1 %2 %3 %4 %5 %6 %7 %8 %9 & exit /b !errorlevel! )
 if /i "%CMD%"=="python"   ( %PY% %1 %2 %3 %4 %5 %6 %7 %8 %9 & exit /b !errorlevel! )
@@ -119,6 +126,8 @@ echo   info      clip metadata without downloading
 echo   doctor    network and FFmpeg diagnostics
 echo   audio     audio stage: demo, analyze, sync, fetch-model, doctor
 echo   audio-setup  install PyTorch and the transcription model
+echo   fuse      merge video and audio notes into one list
+echo   ablation  fusion against single channels on a known answer
 echo   bench     compare the C++ core against numpy
 echo   build     build the native C++ core
 echo   test      run the test suite

@@ -9,7 +9,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from mir.common.types import PITCH_MAX, PITCH_MIN, KeyboardLayout, KeySlot
+from mir.common.types import (
+    BLACK_PITCH_CLASSES,
+    PITCH_MAX,
+    PITCH_MIN,
+    KeyboardLayout,
+    KeySlot,
+    is_black_key,
+)
 
 __all__ = [
     "BLACK_KEY_HEIGHT_RATIO",
@@ -21,19 +28,11 @@ __all__ = [
     "white_keys_in_range",
 ]
 
-BLACK_PITCH_CLASSES = frozenset({1, 3, 6, 8, 10})
-"""Ступени внутри октавы, соответствующие чёрным клавишам (до-диез, ре-диез, ...)."""
-
 BLACK_KEY_WIDTH_RATIO = 0.6
 """Ширина чёрной клавиши относительно белой."""
 
 BLACK_KEY_HEIGHT_RATIO = 0.62
 """Высота чёрной клавиши относительно белой."""
-
-
-def is_black_key(pitch: int) -> bool:
-    """Чёрная ли клавиша у ноты с этим MIDI-номером."""
-    return pitch % 12 in BLACK_PITCH_CLASSES
 
 
 def white_keys_in_range(lowest: int, highest: int) -> list[int]:

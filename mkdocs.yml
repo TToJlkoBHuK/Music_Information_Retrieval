@@ -7,6 +7,9 @@ docs_dir: docs
 site_dir: site
 use_directory_urls: false
 
+validation:
+  anchors: warn
+
 theme:
   name: material
   language: ru
@@ -61,6 +64,14 @@ markdown_extensions:
   - tables
   - toc:
       permalink: true
+      # Якоря из русских заголовков: по умолчанию кириллица выбрасывается,
+      # и все заголовки получают безликие «_1», «_2», на которые не сослаться.
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  # Формулы раздела «Теория»; рисует MathJax (extra_javascript ниже).
+  - pymdownx.arithmatex:
+      generic: true
   - pymdownx.details
   - pymdownx.superfences:
       custom_fences:
@@ -72,6 +83,10 @@ markdown_extensions:
   - pymdownx.inlinehilite
   - pymdownx.tabbed:
       alternate_style: true
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
 
 nav:
   - Проект:
@@ -85,6 +100,14 @@ nav:
       - Обзор литературы: literature-review.md
       - Существующие решения: competitors.md
       - Форматы MIDI и MusicXML: formats.md
+  - Теория:
+      - theory/index.md
+      - Модель ролика: theory/visualizer.md
+      - Компьютерное зрение: theory/vision.md
+      - Анализ звука: theory/audio.md
+      - Слияние каналов: theory/fusion.md
+      - Оценка качества: theory/metrics.md
+      - Нотный текст: theory/notation.md
   - Модули:
       - Python-пакет: modules/mir.md
       - Общие типы: modules/common.md

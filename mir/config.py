@@ -168,16 +168,22 @@ class AudioConfig:
 
 @dataclass(frozen=True)
 class FusionConfig:
-    """Параметры слияния видео- и аудиоканалов."""
+    """Параметры слияния видео- и аудиоканалов.
+
+    Обоснование каждого значения — в `config/README.md`.
+    """
 
     onset_tolerance: float = 0.08
+    loose_onset_tolerance: float = 0.2
     max_av_offset: float = 1.0
     min_offset_confidence: float = 0.3
     offset_resolution: float = 0.002
     offset_smoothing: float = 0.015
     min_offset_pairs: int = 8
-    duration_weight: float = 0.3
-    octave_artifact_ratio: float = 0.8
+    offset_window: float = 30.0
+    max_offset_drift: float = 0.25
+    min_channel_trust: float = 0.5
+    audio_confidence_quantile: float = 0.1
 
 
 @dataclass(frozen=True)
@@ -377,6 +383,16 @@ def _validate_fusion(fusion: FusionConfig) -> list[str]:
         problems.append("fusion.min_offset_pairs должен быть не меньше 1")
     if not 0.0 <= fusion.min_offset_confidence <= 1.0:
         problems.append("fusion.min_offset_confidence должен лежать в диапазоне 0..1")
+    if not 0 < fusion.onset_tolerance <= fusion.loose_onset_tolerance:
+        problems.append(
+            "fusion: нужно 0 < onset_tolerance <= loose_onset_tolerance — второй проход "
+            "сопоставления шире первого"
+        )
+    if fusion.offset_window <= 0 or fusion.max_offset_drift <= 0:
+        problems.append("fusion: offset_window и max_offset_drift должны быть положительными")
+    for name in ("min_channel_trust", "audio_confidence_quantile"):
+        if not 0.0 <= getattr(fusion, name) <= 1.0:
+            problems.append(f"fusion.{name} должен лежать в диапазоне 0..1")
     return problems
 
 

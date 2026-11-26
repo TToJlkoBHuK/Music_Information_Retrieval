@@ -25,6 +25,10 @@ export/
 
 ## `midi_writer.py`
 
+**Уже есть: исполнительский MIDI** — `write_performance_midi(notes, path, pedals=())`. Ноты как сыграны, время в секундах, без тактов и квантования; по дорожке на руку. Нужен для проверки на слух результата слияния каналов (`run fuse … --midi`). Пишется без сторонних библиотек.
+
+**Этап 6: нотный MIDI** — с темпом, размером и тональностью:
+
 ```python
 def write_midi(transcription: Transcription, path: Path, ppq: int = 480) -> Path:
     """

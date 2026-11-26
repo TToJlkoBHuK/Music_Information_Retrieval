@@ -11,6 +11,11 @@ pitch,onset,offset,velocity,hand,source,confidence
 
 Обязательны первые три столбца; остальные можно опустить — так проще
 размечать эталон вручную.
+
+Рядом с нотами видео сохраняются блоки-кандидаты — то, что датчик видел,
+но не смог доказать: `video.csv` → `video.candidates.csv`
+([`candidates_path`][mir.eval.notes_io.candidates_path]). Слияние каналов
+находит этот файл само.
 """
 
 from __future__ import annotations
@@ -21,9 +26,14 @@ from pathlib import Path
 from mir.common.enums import Hand, Source
 from mir.common.types import NoteEvent
 
-__all__ = ["read_notes_csv", "write_notes_csv"]
+__all__ = ["candidates_path", "read_notes_csv", "write_notes_csv"]
 
 _COLUMNS = ["pitch", "onset", "offset", "velocity", "hand", "source", "confidence"]
+
+
+def candidates_path(notes_path: Path) -> Path:
+    """Где лежат блоки-кандидаты для файла с нотами видео."""
+    return notes_path.with_suffix(".candidates.csv")
 
 
 def write_notes_csv(notes: list[NoteEvent], path: Path) -> None:

@@ -83,6 +83,17 @@ class TestValidation:
         with pytest.raises(ConfigError, match="solid_levels"):
             clean_load(overrides={"vision": {"sensor": {"solid_levels": []}}})
 
+    def test_loose_matching_pass_is_wider_than_tight(self, clean_load) -> None:
+        """Второй проход сопоставления подбирает то, что не вошло в первый."""
+        with pytest.raises(ConfigError, match="loose_onset_tolerance"):
+            clean_load(overrides={"fusion": {"loose_onset_tolerance": 0.05}})
+
+    def test_fusion_shares_in_unit_range(self, clean_load) -> None:
+        with pytest.raises(ConfigError, match="audio_confidence_quantile"):
+            clean_load(overrides={"fusion": {"audio_confidence_quantile": 1.5}})
+        with pytest.raises(ConfigError, match="min_channel_trust"):
+            clean_load(overrides={"fusion": {"min_channel_trust": -0.1}})
+
     def test_bpm_range_ordered(self, clean_load) -> None:
         with pytest.raises(ConfigError, match="min_bpm"):
             clean_load(overrides={"audio": {"min_bpm": 300.0}})
