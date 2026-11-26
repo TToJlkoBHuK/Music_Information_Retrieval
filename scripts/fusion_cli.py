@@ -188,7 +188,10 @@ def print_report(result: FusionResult, channels: Channels) -> None:
     if result.pitch_shift:
         print(f"октава          : ноты видео сдвинуты на {result.pitch_shift:+d} полутонов")
 
-    by_source = {source: sum(n.source is source for n in result.notes) for source in Source}
+    # Список явный: с Python 3.11 перебор флагов (`for s in Source`) даёт
+    # только одиночные биты, и составной BOTH в него не попадает.
+    sources = (Source.VIDEO, Source.AUDIO, Source.BOTH)
+    by_source = {source: sum(n.source is source for n in result.notes) for source in sources}
     print(
         f"итог            : {len(result.notes)} нот — оба канала {by_source[Source.BOTH]}, "
         f"только видео {by_source[Source.VIDEO]}, только звук {by_source[Source.AUDIO]}"

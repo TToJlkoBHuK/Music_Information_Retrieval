@@ -227,7 +227,7 @@ git clone https://github.com/TToJlkoBHuK/Music_Information_Retrieval.git
 cd Music_Information_Retrieval
 
 docker compose build
-docker compose run --rm mir pytest tests             # 348 тестов, каждый видно отдельной строкой
+docker compose run --rm mir pytest tests             # 466 тестов, каждый видно отдельной строкой
 ```
 
 Разбор ссылки без обращения к сети:
@@ -303,14 +303,16 @@ pytest --cov=mir                 # покрытие (NF-17)
 
 ### Документация
 
-Собирается автоматически из README модулей и docstrings — разойтись с кодом не может.
+Сайт: https://ttojlkobhuk.github.io/Music_Information_Retrieval/ — там же раздел «Теория» со всеми методами, на которых стоит проект: модель ролика, компьютерное зрение, анализ звука, слияние каналов, метрики, нотный текст.
+
+Описания модулей собираются автоматически из их README и docstrings — разойтись с кодом не могут.
 
 ```bash
 mkdocs serve                     # http://127.0.0.1:8000
 docker compose up docs           # то же самое в контейнере
 ```
 
-При пуше в `master` документация публикуется на GitHub Pages.
+При пуше в `main` документация публикуется на GitHub Pages.
 
 <hr>
 
